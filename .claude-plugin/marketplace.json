@@ -43,6 +43,19 @@
         "toggle",
         "mod"
       ]
+    },
+    {
+      "name": "cache-clock",
+      "source": "./plugins/cache-clock",
+      "description": "Status line countdown until the prompt cache goes cold, a warning before it does, and /keepwarm",
+      "category": "productivity",
+      "keywords": [
+        "prompt cache",
+        "cost",
+        "status line",
+        "keep warm",
+        "mod"
+      ]
     }
   ]
 }

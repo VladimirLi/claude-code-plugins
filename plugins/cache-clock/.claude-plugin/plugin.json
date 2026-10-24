@@ -1,0 +1,40 @@
+{
+  "name": "cache-clock",
+  "version": "0.1.1",
+  "description": "Status line countdown until this chat's prompt cache goes cold, a warning before it does, and /keepwarm to keep it warm with a hidden fork",
+  "author": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
+  "homepage": "https://github.com/VladimirLi/claude-code-plugins/tree/main/plugins/cache-clock",
+  "repository": "https://github.com/VladimirLi/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "prompt cache",
+    "cost",
+    "status line",
+    "keep warm",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "ttlMinutes": {
+      "type": "number",
+      "title": "Cache lifetime (minutes)",
+      "description": "How long the cache lives after the last request: 60 on a Claude subscription, 5 with an API key, or what promptCacheTtl sets.",
+      "default": 60
+    },
+    "warnMinutes": {
+      "type": "number",
+      "title": "Warn before cold (minutes)",
+      "description": "Show a toast this many minutes before the cache goes cold. 0: no warning.",
+      "default": 5
+    },
+    "keepWarmHours": {
+      "type": "number",
+      "title": "Keep warm for (hours)",
+      "description": "How long /keepwarm keeps the cache warm when no time is given. It also stops at your next prompt.",
+      "default": 2
+    }
+  }
+}
