@@ -1,0 +1,14 @@
+{
+  "name": "vladimirli-plugins",
+  "description": "Claude Code plugins, mods and skills by VladimirLi",
+  "owner": { "name": "VladimirLi", "url": "https://github.com/VladimirLi" },
+  "plugins": [
+    {
+      "name": "brain-dump",
+      "source": "./plugins/brain-dump",
+      "description": "Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them",
+      "category": "productivity",
+      "keywords": ["prompt", "voice", "dictation", "rewrite", "mod"]
+    }
+  ]
+}

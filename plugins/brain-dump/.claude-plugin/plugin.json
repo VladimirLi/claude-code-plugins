@@ -1,0 +1,98 @@
+{
+  "name": "brain-dump",
+  "version": "0.4.0",
+  "description": "Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them, with sections that fit the intent (bug, feature, change, question, review, workflow)",
+  "author": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
+  "homepage": "https://github.com/VladimirLi/claude-code-plugins/tree/main/plugins/brain-dump",
+  "repository": "https://github.com/VladimirLi/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "prompt",
+    "voice",
+    "dictation",
+    "rewrite",
+    "mod"
+  ],
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "confirm: ask before rewriting a long prompt. auto: rewrite without asking. off: never rewrite (the force prefix still works).",
+      "options": [
+        "confirm",
+        "auto",
+        "off"
+      ],
+      "default": "confirm"
+    },
+    "minWords": {
+      "type": "number",
+      "title": "Minimum words",
+      "description": "A prompt with at least this many words counts as a brain dump.",
+      "default": 120
+    },
+    "forcePrefix": {
+      "type": "string",
+      "title": "Force prefix",
+      "description": "A prompt starting or ending with this word is always rewritten, whatever its length or the mode. The word is removed. Saying \"this is a brain dump\" at the start of a sentence does the same. Empty: none.",
+      "default": "bd"
+    },
+    "skipPrefix": {
+      "type": "string",
+      "title": "Skip prefix",
+      "description": "A prompt starting with this word is never rewritten. The prefix is removed. Empty: none.",
+      "default": "raw"
+    },
+    "askQuestions": {
+      "type": "boolean",
+      "title": "Ask clarifying questions",
+      "description": "Before rewriting, ask about gaps: required sections you did not cover, and points that are unclear or contradictory. Each question offers 'Let the agent decide'.",
+      "default": true
+    },
+    "maxQuestions": {
+      "type": "number",
+      "title": "Max questions",
+      "description": "The most questions to ask in one round.",
+      "default": 3
+    },
+    "requiredSections": {
+      "type": "string",
+      "title": "Required sections (no intent)",
+      "description": "Comma-separated sections a prompt must have when it fits no intent (bug, feature, change, question, review each have their own). A section your brain dump does not cover becomes a question, never a guess. Known: Task, Why, Scope, Requirements and guardrails, Done when.",
+      "default": "Task, Done when, Scope"
+    },
+    "maxRounds": {
+      "type": "number",
+      "title": "Question rounds",
+      "description": "How many times the rewrite is checked for gaps and you are asked again before it goes to the prompt box.",
+      "default": 2
+    },
+    "useConversation": {
+      "type": "boolean",
+      "title": "Use the conversation",
+      "description": "Find gaps with a fork of this conversation, so references like 'that file' are resolved and already-settled points are not asked again. Off: the brain dump alone is read.",
+      "default": true
+    },
+    "review": {
+      "type": "boolean",
+      "title": "Review before sending",
+      "description": "On: the rewrite goes into the prompt box for you to edit and send. Off: the rewrite is sent at once.",
+      "default": true
+    },
+    "keepHistory": {
+      "type": "boolean",
+      "title": "Keep history",
+      "description": "Keep a local log of each brain dump, the answers and the rewrite in ~/.claude/brain-dump/history.jsonl, to review later. Off: nothing is written.",
+      "default": false
+    },
+    "model": {
+      "type": "string",
+      "title": "Model",
+      "description": "The model that asks the questions and writes the rewrite (alias or full id).",
+      "default": "sonnet"
+    }
+  }
+}

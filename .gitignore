@@ -1,0 +1,6 @@
+.DS_Store
+*.log
+*~
+*.swp
+.mcpb-cache/
+.claude-plugin/types/
