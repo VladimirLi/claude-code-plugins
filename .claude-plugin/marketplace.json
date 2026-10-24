@@ -1,14 +1,36 @@
 {
   "name": "vladimirli-plugins",
   "description": "Claude Code plugins, mods and skills by VladimirLi",
-  "owner": { "name": "VladimirLi", "url": "https://github.com/VladimirLi" },
+  "owner": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
   "plugins": [
     {
       "name": "brain-dump",
       "source": "./plugins/brain-dump",
       "description": "Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them",
       "category": "productivity",
-      "keywords": ["prompt", "voice", "dictation", "rewrite", "mod"]
+      "keywords": [
+        "prompt",
+        "voice",
+        "dictation",
+        "rewrite",
+        "mod"
+      ]
+    },
+    {
+      "name": "session-status",
+      "source": "./plugins/session-status",
+      "description": "Session status above the prompt, decisions as hotkeys, and focus rules that gate side work",
+      "category": "productivity",
+      "keywords": [
+        "status",
+        "focus",
+        "plan",
+        "decisions",
+        "mod"
+      ]
     }
   ]
 }

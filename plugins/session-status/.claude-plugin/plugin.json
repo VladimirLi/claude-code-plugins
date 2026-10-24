@@ -1,0 +1,40 @@
+{
+  "name": "session-status",
+  "version": "0.3.0",
+  "description": "Session status and focus: a fixed goal with a done line, a gate before side work (Fork/Park/Now), a resume card after pauses; what is happening now, plan progress, and the decisions Claude needs from you as hotkeys; /standing opens the full status and plan",
+  "author": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
+  "homepage": "https://github.com/VladimirLi/claude-code-plugins/tree/main/plugins/session-status",
+  "repository": "https://github.com/VladimirLi/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "status",
+    "focus",
+    "plan",
+    "decisions",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "fallbackMinSeconds": {
+      "type": "number",
+      "title": "Fallback after (seconds)",
+      "description": "When a turn this long ends without a status, a fork of the conversation writes one. 0: never.",
+      "default": 120
+    },
+    "focusRules": {
+      "type": "boolean",
+      "title": "Focus rules",
+      "description": "Add the focus rules to each prompt: a fixed goal and done line, a gate before side work (Fork, Park, Now, Make it the goal), and a close when done is met. Off: only the status line is asked for.",
+      "default": true
+    },
+    "usageLog": {
+      "type": "boolean",
+      "title": "Usage log",
+      "description": "Append a line to ~/.claude/usage.jsonl for each gate shown, each gate answer and each resume, to review how the gate is used. Off: nothing is written.",
+      "default": false
+    }
+  }
+}

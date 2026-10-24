@@ -5,19 +5,20 @@ A collection of Claude Code plugins, mods and skills, published as a plugin mark
 | Plugin | What it does |
 | --- | --- |
 | [brain-dump](plugins/brain-dump) | Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them |
+| [session-status](plugins/session-status) | Session status above the prompt, decisions as hotkeys, and focus rules that gate side work |
 
 ## Install
 
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install brain-dump --marketplace VladimirLi/claude-code-plugins
+/plugin install <plugin> --marketplace VladimirLi/claude-code-plugins
 ```
 
 Answer `y` to add the marketplace, then pick a scope. From a shell:
 
 ```
-claude plugin install brain-dump --marketplace VladimirLi/claude-code-plugins
+claude plugin install <plugin> --marketplace VladimirLi/claude-code-plugins
 ```
 
 In the desktop app: click + next to the prompt box, then Plugins, Add marketplace with `VladimirLi/claude-code-plugins`, then Add plugin.
