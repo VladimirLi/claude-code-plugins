@@ -31,6 +31,18 @@
         "decisions",
         "mod"
       ]
+    },
+    {
+      "name": "switchboard",
+      "source": "./plugins/switchboard",
+      "description": "/mods lists every mod and turns each on or off with a key",
+      "category": "productivity",
+      "keywords": [
+        "mods",
+        "plugins",
+        "toggle",
+        "mod"
+      ]
     }
   ]
 }

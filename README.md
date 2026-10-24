@@ -6,6 +6,7 @@ A collection of Claude Code plugins, mods and skills, published as a plugin mark
 | --- | --- |
 | [brain-dump](plugins/brain-dump) | Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them |
 | [session-status](plugins/session-status) | Session status above the prompt, decisions as hotkeys, and focus rules that gate side work |
+| [switchboard](plugins/switchboard) | `/mods` lists every mod and turns each on or off with a key |
 
 ## Install
 

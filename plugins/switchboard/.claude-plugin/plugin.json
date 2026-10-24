@@ -1,0 +1,19 @@
+{
+  "name": "switchboard",
+  "version": "0.2.0",
+  "description": "/mods lists every mod (this session's mods and installed plugins with a hooks module) and turns each on or off",
+  "author": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
+  "homepage": "https://github.com/VladimirLi/claude-code-plugins/tree/main/plugins/switchboard",
+  "repository": "https://github.com/VladimirLi/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "mods",
+    "plugins",
+    "toggle",
+    "mod"
+  ],
+  "types": "./types/index.d.ts"
+}
