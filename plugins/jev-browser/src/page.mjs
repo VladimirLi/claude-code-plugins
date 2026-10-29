@@ -5,7 +5,7 @@
 // (Playwright's rule), so ids survive re-snapshots and diffs make sense. Ids are never reused
 // within a session (the daemon passes the next free number to each new document), so an id
 // from a page that navigated away fails as "gone" instead of hitting another element.
-export const VERSION = 9;
+export const VERSION = 10;
 
 export const INSTALL = function (VERSION) {
   if (window.__jevb && window.__jevb.v === VERSION) return window.__jevb;
@@ -53,6 +53,12 @@ export const INSTALL = function (VERSION) {
       t += n.textContent;
     }
     return clean(t, 60);
+  };
+  const defaultButton = (f) => f && [...f.elements].find((x) => (x.tagName === "BUTTON" && (x.type || "submit") === "submit") || (x.tagName === "INPUT" && /^(submit|image)$/.test(x.type)));
+  const submitterOf = (el) => {
+    if (!el || !/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || /^(submit|image|button|reset)$/.test(el.type)) return "";
+    const b = defaultButton(el.form || el.closest("form"));
+    return b ? clean(b.tagName === "INPUT" ? (b.value || b.alt || b.getAttribute("aria-label")) : (b.innerText || b.getAttribute("aria-label") || b.title), 60) : "";
   };
   const cls = (n) => String(n?.className?.baseVal ?? n?.className ?? "");
   const FILLER = /^(selected|active|open|checked|disabled|hover|focus|show|hide|hidden|fade|flex|grid|block|inline|items|justify|center|rounded|text|font|medium|bold|icon|btn|absolute|relative|fixed|sticky|static|top|bottom|left|right|full|auto|none|border|shadow|ring|offset|background|transition|colors|duration|ease|cursor|pointer|outline|group|container|wrapper|inner|outer|root|item|link|only|content|overflow|truncate|nowrap|gap|space|default|base|mui|css|style|component|wrap)$/i;
@@ -154,6 +160,9 @@ export const INSTALL = function (VERSION) {
         const label = labelOf(el); if (label) o.label = label;
         const ph = el.getAttribute("placeholder"); if (ph) o.placeholder = clean(ph, 60);
         if (!label && !ph && el.name) o.name = el.name;
+        // the button Enter in this field presses (its form's default button): the irreversible
+        // gate judges press_enter by it, since the field's own label says nothing about what commits
+        const sub = submitterOf(el); if (sub) o.submitter = sub;
         if (tag === "select") {
           o.value = clean(el.selectedOptions?.[0]?.text, 40);
           o.options = [...el.options].slice(0, 40).map((op) => clean(op.text, 30));
@@ -337,6 +346,18 @@ export const INSTALL = function (VERSION) {
   const target = (id) => { const r = J.els.get(id); if (!r || !r.el.isConnected) throw new Error("gone"); return r.el; };
   const fire = (el, ...types) => { for (const t of types) el.dispatchEvent(new Event(t, { bubbles: true })); };
   J.el = target;
+  // document.activeElement (through shadow roots and same-origin frames) as a gate brief
+  J.focused = () => {
+    let a = document.activeElement;
+    for (let k = 0; a && k < 8; k++) {
+      if (a.shadowRoot?.activeElement) { a = a.shadowRoot.activeElement; continue; }
+      if (/^I?FRAME$/.test(a.tagName)) { let d = null; try { d = a.contentDocument; } catch {} if (d?.activeElement) { a = d.activeElement; continue; } }
+      break;
+    }
+    if (!a || a === document.body || a === document.documentElement) return null;
+    const tag = a.tagName.toLowerCase(), type = tag === "input" ? (a.getAttribute("type") || "text").toLowerCase() : null;
+    return { tag: type ? `input:${type}` : tag, text: clean(type ? (/^(submit|button|reset|image)$/.test(type) ? a.value || a.alt : "") : a.innerText), label: labelOf(a), submitter: submitterOf(a) || undefined };
+  };
   J.focus = (id) => { const el = target(id); el.focus({ preventScroll: true }); return el.ownerDocument.activeElement === el || el.contains(el.ownerDocument.activeElement); };
   J.selectAll = (id) => {
     const el = target(id);

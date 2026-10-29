@@ -45,6 +45,52 @@ export function irreversibleRule(el, page) {
   return null;
 }
 
+// The gate for one action, keyed on what it commits rather than on its target's label alone.
+// Enter in a field submits the field's form, so the form's default button (`submitter`, from
+// the page script) is judged; Enter or Space on a focused button presses that button. `focused`
+// is document.activeElement's brief, for press_key without a target.
+const ENTER = /^(Enter|NumpadEnter)$/, PRESSES = /^(Enter|NumpadEnter|Space| )$/;
+export function gateRule(op, el, page, { key, focused } = {}) {
+  if (op === "click" || op === "dblclick") return irreversibleRule(el, page);
+  if (op === "press_enter") return irreversibleRule(el, page) || submitRule(el, page);
+  if (op === "press_key") {
+    const k = String(key ?? "");
+    const on = el ?? focused;
+    if (!on || !PRESSES.test(k)) return null;
+    return irreversibleRule(on, page) || (ENTER.test(k) ? submitRule(on, page) : null);
+  }
+  return null;
+}
+function submitRule(el, page) {
+  if (!el?.submitter) return null;
+  const r = irreversibleRule({ tag: "button", text: el.submitter }, page);
+  return r && `Enter submits the form: ${r}`;
+}
+
+// The same rule inside the page (the safety net in tab.mjs): a capture-phase submit listener
+// that stops any form submit whose button hits the rule, however it was started (Enter, a
+// click, requestSubmit, a page script). It records the hold on the top window; the tab reads
+// and clears it after each action. window.top.__jevbAllow (set for allow_irreversible) lets it pass.
+export const SUBMIT_GUARD = `(() => {
+  if (window.__jevbSubmitGuard) return; window.__jevbSubmitGuard = 1;
+  const STRONG = ${STRONG}, WEAK = ${WEAK}, MONEY = ${MONEY};
+  const top = (() => { try { return window.top.document && window.top; } catch { return window; } })();
+  const label = (b) => !b ? "" : String(b.tagName === "INPUT" ? (b.value || b.alt || b.getAttribute("aria-label") || "") : (b.innerText || b.getAttribute("aria-label") || b.title || "")).replace(/\s+/g, " ").trim();
+  addEventListener("submit", (e) => {
+    try {
+      if (top.__jevbAllow) return;
+      const f = e.target, b = e.submitter || [...(f.elements || [])].find((x) => (x.tagName === "BUTTON" && (x.type || "submit") === "submit") || (x.tagName === "INPUT" && /^(submit|image)$/.test(x.type)));
+      const l = label(b);
+      if (!l) return;
+      const ctx = location.href + " " + document.title + " " + (document.body ? document.body.innerText.slice(0, 20000) : "");
+      if (STRONG.test(l) || (WEAK.test(l) && MONEY.test(ctx))) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        top.__jevbHeldSubmit = l.slice(0, 80);
+      }
+    } catch {}
+  }, true);
+})()`;
+
 export function dialogRisky(message) {
   return STRONG.test(message) || /\b(delete|remove|permanently|cannot be undone|are you sure you want to (delete|pay|buy|send|cancel))\b/i.test(message);
 }

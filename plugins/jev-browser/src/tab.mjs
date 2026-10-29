@@ -2,7 +2,7 @@
 // network and navigation for the settler, handles dialogs, and executes actions with CDP Input
 // at fresh coordinates after a hit test.
 import { INSTALL, VERSION, MUTATION_WATCH } from "./page.mjs";
-import { dialogRisky } from "./safety.mjs";
+import { dialogRisky, SUBMIT_GUARD } from "./safety.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
@@ -91,12 +91,24 @@ export class Tab {
     await Promise.all([
       s("Page.enable"), s("Network.enable", { maxTotalBufferSize: 0, maxResourceBufferSize: 0 }),
       s("Page.addScriptToEvaluateOnNewDocument", { source: MUTATION_WATCH }),
+      s("Page.addScriptToEvaluateOnNewDocument", { source: SUBMIT_GUARD }),
       s("Emulation.setFocusEmulationEnabled", { enabled: true }),
       s("Emulation.setDeviceMetricsOverride", { ...VIEWPORT, deviceScaleFactor: 1, mobile: false }),
       s("Network.setUserAgentOverride", { userAgent: this.b.ua, acceptLanguage: "en-US,en" }),
       s("Runtime.runIfWaitingForDebugger"),
     ]);
     await this.eval(MUTATION_WATCH).catch(() => {});
+    await this.eval(SUBMIT_GUARD).catch(() => {});
+  }
+
+  // The submit safety net (SUBMIT_GUARD): allow lets the next submits through on this document;
+  // takeHeld moves a stopped submit into this.held, which the agent reports as needs_confirmation.
+  // (set again before each action while on: a new document starts with submits guarded)
+  async allowSubmits(on) { this.allow = !!on; await this.eval(`window.__jevbAllow = ${on ? "true" : "false"}`).catch(() => {}); }
+  async takeHeld() {
+    const l = await this.eval("(() => { const l = window.__jevbHeldSubmit; window.__jevbHeldSubmit = undefined; return l || null })()").catch(() => null);
+    if (l) { this.held = { message: `form submit by "${l}" was stopped`, submit: l }; this.events.push(`stopped a form submit by "${l}" (irreversible)`); }
+    return this.held;
   }
 
   send(method, params = {}, timeout) { return this.cdp.send(method, params, this.sid, timeout); }
@@ -271,6 +283,7 @@ export class Tab {
   //     check | uncheck | drag | upload | scroll | wait | back | navigate
   // Returns a short note; throws a model-readable error. Never retries a mutation.
   async exec({ op, id, value, key, to, direction }) {
+    if (this.allow) await this.eval("window.__jevbAllow = true").catch(() => {});
     switch (op) {
       case "click": case "dblclick": case "right_click": {
         const p = await this.point(id);
