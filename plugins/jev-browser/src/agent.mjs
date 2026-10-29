@@ -149,6 +149,8 @@ function resumeLine(p) {
 }
 // what Enter or Space without a target would press: the focused element, as a gate brief
 const needsFocused = (op, id, key) => op === "press_key" && id == null && /^(Enter|NumpadEnter|Space| )$/.test(String(key ?? ""));
+// a values key to suggest for a field: "query" for a search box, else its label in snake case
+const valueKeyFor = (e) => (SEARCH_FIELD(e) ? "query" : norm(e?.label || e?.placeholder || e?.name || "text").split(" ").slice(0, 3).join("_") || "text");
 // an act step that submits a form: a click on its submit button, or Enter in one of its fields
 const submitsForm = (op, el, key) => !!el && (["click", "dblclick"].includes(op) ? !!el.submits
   : (op === "press_enter" || (op === "press_key" && /^(Enter|NumpadEnter)$/.test(String(key ?? "")))) && !!(el.submits || el.submitter || el.collects));
@@ -288,7 +290,9 @@ export class Agent {
     const task = { goal, ...(hasValues ? { values: shownValues } : {}), history, ...(lastChange ? { last_change: lastChange } : {}) };
     const withValues = hasValues ? ", with the given `task.values`" : "";
     const tools = { ...TOOLS };
-    if (!hasValues) { delete tools.type; delete tools.upload; }
+    // with no values `type` stays a choice, so a goal that needs text stops as needs_value
+    // instead of pressing keys ("Search for Alan Turing": Space, Backspace, … until stuck)
+    if (!hasValues) { tools.type = "Type text into the target text field (the text is not given in `task`)"; delete tools.upload; }
     if (!page.elements.some(FILEISH)) delete tools.upload;
     if (!page.elements.some(SELECTISH)) delete tools.select;
     const common = {
@@ -348,7 +352,6 @@ export class Agent {
       else if (tool === "upload") { const f = page.elements.find(FILEISH); if (f) [ti, tp] = [String(f.id), 0.5]; }
       else if (tool === "type" || tool === "select") tool = "click";
     }
-    if (tool === "type" && !Object.keys(values).length) tool = "click";
     let valueKey = a.value?.choice;
     if (valueKey == null && Object.keys(values).length === 1) valueKey = Object.keys(values)[0];
     return {
@@ -572,6 +575,12 @@ export class Agent {
         history.push({ action: "wait", ...(w.changed ? {} : { note: `no change in ${Math.round(w.ms / 100) / 10} s` }) });
         round--; continue;   // waiting is not an action
       }
+      // text to type that no value gives: hand back the field (Jev never writes text)
+      if (act.tool === "type" && !Object.keys(values).length && FIELDISH(act.el)) {
+        status = "needs_value"; gate = "value"; pending = { op: "type", id: act.target, element: brief(act.el) };
+        info = `the next step types into ${brief(act.el)} and no value was given; pass the text in values (e.g. {"${valueKeyFor(act.el)}": "..."}) and run do again, or type it with act`;
+        break;
+      }
       if (TARGETED.has(act.tool) && (act.target == null || act.p_target < 0.3)) { status = "ambiguous"; info = "target confidence too low; act on a candidate directly, or make the goal more specific"; break; }
       const key = `${act.tool}|${act.target}|${act.valueKey ?? ""}|${page.url}|${page.text}|${page.elements.length}`;
       seen.set(key, (seen.get(key) ?? 0) + 1);
@@ -725,6 +734,7 @@ export class Agent {
     const lines = [`status: ${status}`];
     if (info) lines.push(`info: ${info}`);
     if (pending && gate === "budget") { if (status !== "done") lines.push(`next: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""} ${pending.element}${pending.value_key ? ` <- values.${pending.value_key}` : ""}${pending.option ? ` = "${pending.option}"` : ""}${pending.key ? ` key=${pending.key}` : ""}${pending.to != null ? ` -> [${pending.to}]` : ""} (the planned action when the budget ran out; run it with act)`); }
+    else if (pending && gate === "value") lines.push(`field: [${pending.id}] ${pending.element}`);
     else if (pending) lines.push(`pending: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""}${pending.key ? ` key=${pending.key}` : ""} ${pending.element}${pending.dialog ? ` dialog "${pending.dialog}"` : ""} (gate: ${gate ?? "dialog"})`, resumeLine(pending));
     lines.push(`actions (${history.filter((h) => h.action).length}, ${stats.calls - calls0} Jev calls, ${Date.now() - t0} ms):`);
     for (const h of history) lines.push(h.event ? `  ~ ${h.event}` : `  - ${h.action}${h.element ? ` ${h.element}` : ""}${h.value ? ` <- values.${h.value}` : ""}${h.option ? ` = "${h.option}"` : ""}${h.key ? ` key=${h.key}` : ""}${h.destination ? ` -> ${h.destination}` : ""}${h.note ? ` (${h.note})` : ""}${h.dialog ? ` [dialog: ${h.dialog}]` : ""}${h.error ? ` ERROR ${h.error}` : ""}`);

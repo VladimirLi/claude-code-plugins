@@ -11,6 +11,7 @@ const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SE
   open <url>                                   load a page; prints the element table
   do <goal> [--values JSON] [--max N] [--allow-irreversible] [--vision]
                                                let Jev reach one observable outcome; values are typed by key
+                                               (no values and the goal needs text: status needs_value, with a field: line)
   act <op> [id] [value]                        one action: click|dblclick|right_click|hover|check|uncheck|type|clear|
                                                select|press_enter|press_key|upload|drag|scroll|wait|back|navigate
         e.g. act click 12 · act type 7 "hello" · act select 5 "Option 2" · act press_key Escape

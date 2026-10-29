@@ -18,7 +18,7 @@ const TOOLS = [
   },
   {
     name: "do",
-    description: "Reach ONE observable outcome on the current page (e.g. \"Log in\", \"Add the backpack to the cart\"). Jev (a fast decision model) picks each step; text is never invented: pass what to type in `values` by key (keys like password/token/card are secrets: Jev sees only the key, output is scrubbed). Returns status: done | likely_done (verify) | needs_confirmation (an irreversible action is pending; repeat with allow_irreversible only if the user asked for it) | needs_login | needs_human (captcha) | not_found (the option the goal names does not exist; nothing was changed) | blocked | stuck | ambiguous | error | max_actions (with `next:`, the planned action), the actions taken, and the page. When not done, take over with act.",
+    description: "Reach ONE observable outcome on the current page (e.g. \"Log in\", \"Add the backpack to the cart\"). Jev (a fast decision model) picks each step; text is never invented: pass what to type in `values` by key (keys like password/token/card are secrets: Jev sees only the key, output is scrubbed). Returns status: done | likely_done (verify) | needs_confirmation (an irreversible action is pending; repeat with allow_irreversible only if the user asked for it) | needs_login | needs_value (the goal needs text and no values were given; `field:` names the field: pass the text in values and run do again) | needs_human (captcha) | not_found (the option the goal names does not exist; nothing was changed) | blocked | stuck | ambiguous | error | max_actions (with `next:`, the planned action), the actions taken, and the page. When not done, take over with act.",
     inputSchema: {
       type: "object",
       properties: {
