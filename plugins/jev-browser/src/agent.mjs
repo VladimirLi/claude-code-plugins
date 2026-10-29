@@ -90,6 +90,15 @@ function forJevCapped(page, typed) {
 // history as Jev sees it: without the element id and url code keeps for its own checks
 const hist = (hs) => hs.map(({ id: _i, url: _u, ...h }) => h);
 
+// The diff Jev sees, plus the JS dialog the last action opened: the DOM shows no trace of an
+// alert the tab accepted, so without this the judges read "nothing changed" and the loop
+// repeats the action (context-menu: right_click fired the alert twice, then ended as stuck).
+function withDialog(change, last) {
+  if (!last?.dialog) return change;
+  const { nothing_changed: _n, ...rest } = change ?? {};
+  return { ...rest, dialog: last.dialog };
+}
+
 function repeatsBlock(seq, k, times) {
   if (seq.length < k * times) return false;
   const tail = seq.slice(-k * times), block = tail.slice(0, k).join("\n");
@@ -277,14 +286,14 @@ export class Agent {
   // The confirm question behind every ending. The state carries no action history on purpose:
   // a history of repeated clicks ("Add Element" x2) biased Jev toward yes (0.52 at 2 of 3 buttons
   // with history, 0.03 without); the page alone must show the goal is met.
-  async complete(page, goal, values) {
-    const c = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, ...(Object.keys(values).length ? { values: redactValues(values) } : {}) } }, this.secrets), { complete: COMPLETE_Q });
+  async complete(page, goal, values, dialogs) {
+    const c = await jev(scrub({ page: { ...forJevCapped(page, this.typed), ...(dialogs?.length ? { js_dialogs_shown: dialogs } : {}) }, task: { goal, ...(Object.keys(values).length ? { values: redactValues(values) } : {}) } }, this.secrets), { complete: COMPLETE_Q });
     return +(c.answers.complete?.noul ?? 0).toFixed(2);
   }
 
   // Whether the action a goal names (drag, scroll…) was done, judged from history and the last diff.
   async actionDone(page, goal, history, lastChange) {
-    const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, history: hist(history.filter((h) => h.action).slice(-8)), ...(lastChange ? { last_change: lastChange } : {}) } }, this.secrets), { action_done: ACTION_DONE_Q });
+    const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, history: hist(history.filter((h) => h.action || h.event).slice(-10)), ...(lastChange ? { last_change: lastChange } : {}) } }, this.secrets), { action_done: ACTION_DONE_Q });
     return +(x.answers.action_done?.noul ?? 0).toFixed(2);
   }
 
@@ -295,6 +304,8 @@ export class Agent {
     const history = [], rounds = [];
     let prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange;
     const seen = new Map();
+    // dialogs opened by this do's actions: part of what the page showed, for the confirm question
+    const dialogs = () => history.filter((h) => h.dialog).map((h) => h.dialog);
     tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
     for (let round = 0; round <= max_actions; round++) {
       page = await tab.snapshot();
@@ -302,7 +313,7 @@ export class Agent {
       if (page.captcha) { status = "needs_human"; info = "the page shows a captcha or bot check; a person has to solve it"; break; }
       const useImage = vision || page.elements.length === 0;
       const image = useImage ? await tab.screenshot().catch(() => undefined) : undefined;
-      lastChange = round ? diffForJev(pageDiff(prev, page)) : undefined;
+      lastChange = round ? withDialog(diffForJev(pageDiff(prev, page)), history.filter((h) => h.action && h.action !== "wait").at(-1)) : undefined;
       const a = await this.decide(page, goal, values, hist(history.slice(-12)), lastChange, image);
       prev = page;
       const act = this.resolve(page, a, values);
@@ -321,7 +332,7 @@ export class Agent {
       conf = null;
       const confirm = async () => {
         if (conf == null) {
-          conf = r.confirm = await this.complete(page, goal, values).catch(() => 0);
+          conf = r.confirm = await this.complete(page, goal, values, dialogs()).catch(() => 0);
         }
         return conf;
       };
@@ -358,6 +369,15 @@ export class Agent {
       if (round === max_actions) break;
       if (n("login") >= 0.7 && !Object.keys(values).length) { status = "needs_login"; info = "the page wants a sign-in and no values were given; pass credentials in values, or log in by hand in the jevb profile"; break; }
       if (round > 0 && n("error") >= 0.7) { status = "error"; info = "the page shows an error after the last action"; break; }
+      // the last action opened a JS dialog: never run it again or fall back to another action
+      // (a repeat fires the dialog again); end with the judges, which now see the dialog
+      if (lastAct?.dialog && !lastAct.error && (act.tool === "none" || (act.tool === lastAct.action && act.target === lastAct.id))) {
+        const [c, ad] = await Promise.all([confirm(), this.actionDone(page, goal, history, lastChange).catch(() => 0)]);
+        r.action_done = ad;
+        if (c >= 0.65 || (ad >= 0.5 && done >= 0.5)) { status = "done"; info = `the ${lastAct.action} opened a dialog (${lastAct.dialog}) and Jev sees nothing left to do`; break; }
+        if (c >= 0.45 || ad >= 0.5) { status = "likely_done"; info = `the ${lastAct.action} opened a dialog (${lastAct.dialog}), so it was not repeated; verify with check or observe`; break; }
+        status = "stuck"; info = `the ${lastAct.action} on ${lastAct.element} opened a dialog (${lastAct.dialog}) but the goal does not look met; it was not repeated`; break;
+      }
       if (act.tool === "none" && round === 0 && !retried) { retried = true; await sleep(1000); round--; rounds.pop(); continue; }
       if (act.tool === "none") {
         const c = await confirm();
@@ -475,6 +495,8 @@ export class Agent {
         if (op === "type" && act.valueKey) this.typed.set(act.target, act.valueKey);
         await tab.settle({ since });
       } catch (e) { h.error = e.message.slice(0, 160); }
+      const dl = tab.dialogsSince(since);
+      if (dl.length) h.dialog = dl.join("; ");
       history.push(h);
       if (tab.held) { status = "needs_confirmation"; info = "the action opened a confirmation dialog that looks irreversible, so it was dismissed; repeat with allow_irreversible to accept it"; pending = { op: h.action, id: act.target, element: h.element, dialog: tab.held.message }; break; }
       const u = await tab.url();
@@ -487,7 +509,7 @@ export class Agent {
       // round's snapshot can be older than what finally rendered
       const fresh = await tab.snapshot().catch(() => null);
       if (fresh) {
-        if (fresh.text !== page.text || fresh.elements.length !== page.elements.length || fresh.url !== page.url) { lastChange = diffForJev(pageDiff(prev ?? page, fresh)); conf = null; if (rounds.length) rounds.at(-1).action_done = undefined; }
+        if (fresh.text !== page.text || fresh.elements.length !== page.elements.length || fresh.url !== page.url) { lastChange = withDialog(diffForJev(pageDiff(prev ?? page, fresh)), history.filter((h) => h.action && h.action !== "wait").at(-1)); conf = null; if (rounds.length) rounds.at(-1).action_done = undefined; }
         page = fresh;
       }
       const r0 = rounds.at(-1);
@@ -495,7 +517,7 @@ export class Agent {
       // was done. Goals that name an action cannot be confirmed from the page alone, but the
       // second question also says yes to partial progress, so it only earns likely_done.
       const [c, ad] = await Promise.all([
-        conf ?? this.complete(page, goal, values).catch(() => 0),
+        conf ?? this.complete(page, goal, values, dialogs()).catch(() => 0),
         r0 && r0.action_done != null ? r0.action_done : this.actionDone(page, goal, history, lastChange).catch(() => 0),
       ]);
       conf = c;
@@ -512,7 +534,7 @@ export class Agent {
     if (info) lines.push(`info: ${info}`);
     if (pending) lines.push(`pending: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""} ${pending.element}${pending.dialog ? ` dialog "${pending.dialog}"` : ""} (gate: ${gate ?? "dialog"})`);
     lines.push(`actions (${history.filter((h) => h.action).length}, ${stats.calls - calls0} Jev calls, ${Date.now() - t0} ms):`);
-    for (const h of history) lines.push(h.event ? `  ~ ${h.event}` : `  - ${h.action}${h.element ? ` ${h.element}` : ""}${h.value ? ` <- values.${h.value}` : ""}${h.option ? ` = "${h.option}"` : ""}${h.key ? ` key=${h.key}` : ""}${h.destination ? ` -> ${h.destination}` : ""}${h.note ? ` (${h.note})` : ""}${h.error ? ` ERROR ${h.error}` : ""}`);
+    for (const h of history) lines.push(h.event ? `  ~ ${h.event}` : `  - ${h.action}${h.element ? ` ${h.element}` : ""}${h.value ? ` <- values.${h.value}` : ""}${h.option ? ` = "${h.option}"` : ""}${h.key ? ` key=${h.key}` : ""}${h.destination ? ` -> ${h.destination}` : ""}${h.note ? ` (${h.note})` : ""}${h.dialog ? ` [dialog: ${h.dialog}]` : ""}${h.error ? ` ERROR ${h.error}` : ""}`);
     if (["ambiguous", "stuck", "max_actions"].includes(status) && rounds.at(-1)?.candidates) lines.push(`candidates: ${rounds.at(-1).candidates.map((c) => `[${c.id}] ${c.el} p=${c.p}`).join("; ")}`);
     // done: a short view of the result; otherwise the full page so Claude can take over at once
     const view = ["done", "likely_done"].includes(status)

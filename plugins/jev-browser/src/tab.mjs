@@ -66,7 +66,7 @@ export class Tab {
   constructor(browser, name) {
     this.b = browser; this.cdp = browser.cdp; this.name = name;
     this.targets = []; this.targetId = null; this.sid = null;
-    this.inflight = new Map(); this.events = []; this.loading = false; this.dclAt = 0; this.navAt = 0;
+    this.inflight = new Map(); this.events = []; this.dialogs = []; this.dialogAt = 0; this.loading = false; this.dclAt = 0; this.navAt = 0;
     this.nextId = 1; this.chain = Promise.resolve(); this.dead = false;
     this.dialogPolicy = () => ({ accept: true });
     this.held = null;
@@ -116,6 +116,9 @@ export class Tab {
         const pol = this.dialogPolicy(d);
         this.send("Page.handleJavaScriptDialog", { accept: pol.accept, ...(p.type === "prompt" ? { promptText: pol.text ?? p.defaultPrompt ?? "" } : {}) }).catch(() => {});
         this.events.push(`${d.type} dialog "${d.message.slice(0, 100)}" ${pol.accept ? "accepted" : "dismissed"}`);
+        // a dialog is a page reaction the DOM never shows: the settler and the ending judges
+        // must see it as a change (context-menu: the alert was the whole result of right_click)
+        this.dialogAt = now(); this.dialogs.push({ ...d, accepted: pol.accept, at: this.dialogAt }); if (this.dialogs.length > 20) this.dialogs.shift();
         if (!pol.accept && pol.held) this.held = d;
         break;
       }
@@ -184,12 +187,17 @@ export class Tab {
   // Wait for the page to change after snapshot `page` (its `at` stamp): the next DOM mutation,
   // a new document, or `cap` ms. Then settle. For pages that wait on a timer (spinners, delayed
   // content), where settle() alone returns at once because nothing is moving.
+  // JS dialogs (alert, confirm, prompt) that opened at or after `since`, as one-line strings.
+  dialogsSince(since) {
+    return this.dialogs.filter((d) => d.at >= since).map((d) => `${d.type} "${d.message.slice(0, 120)}" ${d.accepted ? "accepted" : "dismissed"}`);
+  }
+
   async waitChange(page, cap = 8000) {
     const t0 = now();
     let r = { changed: false };
     try { r = await this.J("waitChange", page?.at ?? null, cap); }
     catch { r = { changed: true }; await this.waitDoc(10_000); }   // navigated mid-wait
-    if (this.loading) r.changed = true;
+    if (this.loading || this.dialogAt >= t0) r.changed = true;
     await this.settle({ cap: 2000 });
     return { changed: !!r.changed, ms: now() - t0 };
   }

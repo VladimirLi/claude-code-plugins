@@ -68,3 +68,17 @@ test("neg-missing-option: Option 7 leaves the dropdown at \"\" and ends as not_f
     assert.ok(["done", "likely_done"].includes(ok.status), `status ${ok.status}`);
   } finally { run(s, "close"); }
 });
+
+// a JS dialog is a page change: the right_click's alert must reach the ending judges, so the
+// action is not repeated (it was: the alert fired twice, then do ended as stuck)
+test("context-menu: done or likely_done after exactly 1 right_click and 1 dialog", live, () => {
+  const s = "test-context-menu";
+  try {
+    run(s, "open", "https://the-internet.herokuapp.com/context_menu");
+    const out = run(s, "do", "Right-click inside the box to open the context menu");
+    const status = out.match(/^status: (\S+)/m)?.[1];
+    assert.ok(["done", "likely_done"].includes(status), `status ${status}`);
+    assert.equal((out.match(/^ {2}- right_click /gm) ?? []).length, 1, out);
+    assert.equal((out.match(/^ {2}~ alert dialog /gm) ?? []).length, 1, out);
+  } finally { run(s, "close"); }
+});
