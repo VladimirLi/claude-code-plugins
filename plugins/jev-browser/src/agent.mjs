@@ -261,7 +261,8 @@ export class Agent {
     };
     if (hasValues) common.value = { type: "choice", instructions: "If the next action toward `task.goal` types, selects or uploads something, which of `task.values` should it use? Prefer values not yet entered on `page`.", criteria: Object.fromEntries(Object.entries(shownValues).map(([k, v]) => [k, v])) };
     const targetQ = { type: "choice", instructions: "Which entry of `page.elements` (by its `i`) should the next action toward `task.goal` act on?" };
-    const jp = forJev(page, this.typed, image ? page.boxes : null);
+    const k = this.tab.shotScale ?? 1;   // boxes in the image's pixels (a shrunk capture shrinks them too)
+    const jp = forJev(page, this.typed, image ? (k === 1 ? page.boxes : Object.fromEntries(Object.entries(page.boxes ?? {}).map(([id, b]) => [id, b.map((n) => Math.round(n * k))]))) : null);
     if (image) targetQ.instructions += IMAGE_NOTE;
     const call = (state, qs) => jev(scrub(state, this.secrets), qs, { image });
     if (page.elements.length <= MAX_SINGLE && JSON.stringify(jp).length <= MAX_STATE_CHARS) {

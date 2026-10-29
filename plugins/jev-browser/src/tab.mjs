@@ -239,7 +239,19 @@ export class Tab {
   async screenshot({ boxes } = {}) {
     const marked = boxes && Object.keys(boxes).length ? await this.J("marks", boxes).catch(() => 0) : 0;
     try {
-      const { data } = await this.send("Page.captureScreenshot", { format: "jpeg", quality: 60 });
+      // In the user's own Chrome there is no viewport override: a Retina or wide window is
+      // larger than Jev accepts (each side at most 1568 px, never resized for us). Capture at
+      // shotScale × CSS pixels; the agent scales element boxes by the same factor.
+      let clip;
+      this.shotScale = 1;
+      if (this.b.user) {
+        const v = await this.eval("[innerWidth, innerHeight, devicePixelRatio]");
+        if (Array.isArray(v)) {
+          this.shotScale = Math.min(1, 1568 / v[0], 1568 / v[1]);
+          clip = { x: 0, y: 0, width: v[0], height: v[1], scale: this.shotScale / (v[2] || 1) };
+        }
+      }
+      const { data } = await this.send("Page.captureScreenshot", { format: "jpeg", quality: 60, ...(clip ? { clip } : {}) });
       return data;
     } finally { if (marked) await this.J("unmark").catch(() => {}); }
   }
