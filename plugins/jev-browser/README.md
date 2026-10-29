@@ -38,12 +38,13 @@ The first command starts the daemon, and the daemon starts Chrome. Both stay war
 | Part | What it does |
 | --- | --- |
 | Connection | One CDP WebSocket. Each session gets its own window, so its tab is active and renders at full rate (background tabs in headless Chrome barely tick `requestAnimationFrame`). Pop-ups opened by a tab become the session's tab. |
-| Observer | One injected script per call: interactive elements through open shadow roots and same-origin iframes, labels, state, nearby text, a covered flag from a hit test, and visible text. |
+| Observer | One injected script per call: interactive elements through open shadow roots and same-origin iframes, labels, state, nearby text, a covered flag from a hit test, visible text, and a summary of visible tables (headers marked with their sort order, so Jev can see that a column is sorted). |
 | Ids | Sticky: an element keeps its id while its role and name stay the same. Ids are never reused within a session, so an id from a page that navigated away fails as "gone". |
 | Executor | Re-resolves the id, scrolls it into view, runs a hit test, then sends CDP `Input` events at fresh coordinates. Short text is typed as key events (date pickers and masks listen to keys). Mutations are never retried. |
 | Settler | Two animation frames. If the action caused DOM or network activity, it waits until both are quiet for 150 ms (requests older than 2 s are ignored). Navigation waits for `DOMContentLoaded`, not `load`. |
 | Overlays | A covering overlay with a plain close/accept control is closed (at most twice per URL), then the target is checked again. |
 | Decider | One Jev request per step: operation, target, value key, and done/blocked/error/login/irreversible scores. Pages with more than 240 elements use two stages (groups, then elements). |
+| Stopping | Jev's done score never ends a run alone. Every ending asks a separate `complete` question about the page only, with no action history, because a history of repeated clicks made Jev say yes too early. `done` needs `complete` of 0.65 or more, and 0.45 to 0.65 gives `likely_done`. When Jev picks no action and the goal is not met, its next-best action runs instead. Before an action repeats on the same element (a toggle such as a sort header, or a drag swap), `complete` is asked first. For drags, scrolls and keys, a second question checks whether the action the goal names was done, and a yes ends the run as `likely_done`. A `stuck`, `max_actions` or `ambiguous` ending asks both questions, so a met goal is reported as met. Re-entering a value after every value has been entered ends the run as `likely_done`. |
 | Statuses | `done`, `likely_done`, `needs_confirmation`, `needs_login`, `needs_human` (captcha), `blocked`, `stuck`, `ambiguous`, `error`, `max_actions`. |
 
 ## Safety

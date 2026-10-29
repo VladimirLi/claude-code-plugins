@@ -5,7 +5,7 @@
 // (Playwright's rule), so ids survive re-snapshots and diffs make sense. Ids are never reused
 // within a session (the daemon passes the next free number to each new document), so an id
 // from a page that navigated away fails as "gone" instead of hitting another element.
-export const VERSION = 5;
+export const VERSION = 6;
 
 export const INSTALL = function (VERSION) {
   if (window.__jevb && window.__jevb.v === VERSION) return window.__jevb;
@@ -210,13 +210,42 @@ export const INSTALL = function (VERSION) {
       }
       text = clean(text, 2500);
     }
+    // Visible data tables, summarised so row order and sort state are plain to read (flat page
+    // text hides both): headers marked with aria-sort, or with the order their cells are in.
+    const tables = [];
+    for (const t of document.querySelectorAll('table, [role=grid], [role=table]')) {
+      if (tables.length >= 4) break;
+      const r = t.getBoundingClientRect();
+      if (!r.width || r.bottom < 0 || r.top > H || !visible(t)) continue;
+      const rows = [...t.querySelectorAll('tr, [role=row]')].filter((x) => x.closest('table, [role=grid], [role=table]') === t).slice(0, 60);
+      const cells = (row) => [...row.querySelectorAll(':scope > th, :scope > td, :scope > [role=columnheader], :scope > [role=cell], :scope > [role=gridcell], :scope > [role=rowheader]')];
+      const head = rows.find((x) => cells(x).some((c) => c.tagName === "TH" || c.getAttribute("role") === "columnheader"));
+      const body = rows.filter((x) => x !== head && cells(x).length && !cells(x).every((c) => c.tagName === "TH"));
+      if (!head || body.length < 2) continue;
+      const hs = cells(head);
+      const num = (s) => { const m = s.replace(/[$€£,\s%]/g, ""); return /^-?\d+(\.\d+)?$/.test(m) ? +m : null; };
+      const columns = hs.slice(0, 12).map((h, k) => {
+        const name = clean(h.innerText, 30) || `col ${k + 1}`;
+        const aria = h.getAttribute("aria-sort") || h.closest("[aria-sort]")?.getAttribute("aria-sort");
+        if (aria && aria !== "none") return `${name} (sorted ${aria})`;
+        const vals = body.map((x) => clean(cells(x)[k]?.innerText ?? "", 40)).filter(Boolean);
+        if (vals.length < 3 || new Set(vals).size < 3) return name;
+        const ns = vals.map(num), numeric = ns.every((v) => v != null);
+        const cmp = (a, b, i) => (numeric ? ns[i] - ns[i + 1] : a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }));
+        let asc = true, desc = true;
+        for (let i = 0; i < vals.length - 1; i++) { const c = cmp(vals[i], vals[i + 1], i); if (c > 0) asc = false; if (c < 0) desc = false; }
+        return asc ? `${name} (rows in ascending order)` : desc ? `${name} (rows in descending order)` : name;
+      });
+      const first = body.slice(0, 6).map((x) => clean(cells(x)[0]?.innerText ?? "", 30));
+      tables.push({ table: tables.length + 1, columns, rows: body.length, first_column: first });
+    }
     const full = document.body?.innerText ?? "";
     const captcha = [...document.querySelectorAll("iframe[src]")].some((f) => /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|arkoselabs|funcaptcha/i.test(f.src))
       || /verify you are (a )?human|are you a robot|press (and|&) hold|unusual traffic from your computer|checking your browser/i.test(full.slice(0, 5000));
     return {
       url: location.href, title: document.title, text,
       metrics: { scroll_y: Math.round(scrollY), page_height: document.documentElement.scrollHeight, viewport_h: H, text_length: full.length, elements: out.length, cross_origin_frames: xframes || undefined },
-      dialogs, captcha, elements: out, next: J.next,
+      dialogs, captcha, tables: tables.length ? tables : undefined, elements: out, next: J.next,
     };
   };
 
