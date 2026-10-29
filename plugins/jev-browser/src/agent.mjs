@@ -63,6 +63,34 @@ function namedOption(opts, words, fromValue) {
   return opts.filter((o) => !PLACEHOLDER_OPT.test(o.trim()) && norm(o) && (w.includes(` ${norm(o)} `) || (fromValue && nw && norm(o).includes(nw))))
     .sort((a, b) => b.length - a.length)[0];
 }
+const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
+
+// A NAV_GOAL met by its last click: a link click (no error) that moved to a new page whose
+// title, url or top text carries the link's own name. The page alone rarely proves "the second
+// book listed there" (books: confirm 0.03 on the right book page), but the click Jev chose for
+// the goal landed where its link said. Returns the link name, or null.
+export function arrivedAt(page, history) {
+  const last = history.filter((h) => h.action && h.action !== "wait").at(-1);
+  if (!last || last.error || last.action !== "click" || !last.name || !/^a$|\[link\]$/.test(last.tag ?? "")) return null;
+  if (!last.url || last.url.split("#")[0] === page.url.split("#")[0]) return null;
+  // listings cut long names ("Full Moon over Noah's Ark: An ..."): drop a cut last word
+  const words = norm(String(last.name).replace(/(\S*)(\.\.\.|…)\s*$/, "")).split(" ").filter(Boolean).slice(0, 6);
+  if (!words.length) return null;
+  const phrase = ` ${words.join(" ")} `, hay = ` ${norm(`${page.title} ${decodeURIComponent(page.url).replace(/[-_/]/g, " ")} ${page.text.slice(0, 400)}`)} `;
+  return hay.includes(phrase) ? last.name : null;
+}
+// "Scroll down to the customer reviews section": the words naming the place, or null for
+// other goals (and for goals that go on after the scroll: "... and open it")
+const SCROLL_GOAL = /^\s*scroll\s+(?:(?:down|up)\s+)?(?:to|until)\s+(.+)$/i;
+export function scrollNames(goal) {
+  const m = String(goal).match(SCROLL_GOAL);
+  if (!m || /\b(and|then)\b|,/.test(m[1])) return null;
+  const words = norm(m[1]).split(" ").filter((w) => w.length >= 3 && !GOAL_STOP.has(w) && !/^(bottom|end|top|part|heading|you|see|reach|reached|visible|shown|appears)$/.test(w));
+  return words.length ? words : null;
+}
+// every word in the text the viewport shows
+const inView = (page, words) => { const hay = ` ${norm(page.text)} `; return words.every((w) => hay.includes(` ${stem(w)}`)); };
+
 function missingSibling(opts, words) {
   const w = norm(words), have = new Set(opts.map(norm));
   for (const o of opts) {
@@ -101,7 +129,7 @@ function forJevCapped(page, typed) {
 }
 
 // history as Jev sees it: without the element id and url code keeps for its own checks
-const hist = (hs) => hs.map(({ id: _i, url: _u, ...h }) => h);
+const hist = (hs) => hs.map(({ id: _i, url: _u, tag: _t, name: _n, ...h }) => h);
 
 // The diff Jev sees, plus the JS dialog the last action opened: the DOM shows no trace of an
 // alert the tab accepted, so without this the judges read "nothing changed" and the loop
@@ -345,7 +373,6 @@ export class Agent {
     if (!words.length) return null;
     const full = await this.tab.J("readText", 200_000).catch(() => page.text);
     const hay = ` ${norm([page.url, page.title, full, ...page.elements.flatMap((e) => [e.label, e.text, e.href, e.name, e.placeholder])].filter(Boolean).join(" "))} `;
-    const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
     return words.every((w) => !hay.includes(` ${stem(w)}`)) ? words : null;
   }
 
@@ -355,7 +382,6 @@ export class Agent {
   async unseen(page, goal) {
     const words = norm(goal.replace(/'[^']*'|"[^"]*"/g, " ")).split(" ").filter((w) => w.length >= 4 && !GOAL_STOP.has(w) && !/\d/.test(w));
     if (!words.length) return null;
-    const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
     const hayOf = (t) => ` ${norm([page.url, page.title, t, ...(page.dialogs ?? []), ...page.elements.flatMap((e) => [e.label, e.text, e.href, e.name, e.placeholder, e.hint, e.near])].filter(Boolean).join(" "))} `;
     let hay = hayOf(page.text), miss = words.filter((w) => !hay.includes(` ${stem(w)}`));
     if (miss.length && page.metrics?.text_length > page.text.length) {
@@ -400,7 +426,7 @@ export class Agent {
     let limit = max_actions;
     this.remember(values);
     const history = [], rounds = [];
-    let prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange, showWaited = false;
+    let scrollWords = null, shownAtStart = false, prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange, showWaited = false;
     const seen = new Map();
     // dialogs opened by this do's actions: part of what the page showed, for the confirm question
     const dialogs = () => history.filter((h) => h.dialog).map((h) => h.dialog);
@@ -409,6 +435,12 @@ export class Agent {
       page = await tab.snapshot();
       for (const e of this.events()) history.push({ event: e });
       if (page.captcha) { status = "needs_human"; info = "the page shows a captcha or bot check; a person has to solve it"; break; }
+      // a scroll goal whose named place was out of view at the start and is in view now: done
+      // (the page-only confirm cannot tell "scrolled to the reviews" from "the page has reviews")
+      if (round === 0) scrollWords = scrollNames(goal), shownAtStart = scrollWords && inView(page, scrollWords);
+      if (round > 0 && scrollWords && !shownAtStart && history.some((h) => /^scroll/.test(h.action ?? "") && !h.error) && inView(page, scrollWords)) {
+        status = "done"; info = `scrolled until ${scrollWords.map((w) => `"${w}"`).join(", ")} came into view`; break;
+      }
       // The image goes in only on signals from the loop: --vision, a page with no elements, the
       // last action hit a covering element, or (after a text decision) a weak target or a goal
       // word the text does not show. Each screenshot costs a capture and a heavier Jev call.
@@ -455,9 +487,13 @@ export class Agent {
       // DONE is never trusted alone: every ending goes through the `complete` confirm question
       // (asked at most once per round). done >= 0.5 (0.9 before any action) only triggers it.
       conf = null;
+      // a scroll goal is not met while its named place is out of view, whatever the page has
+      // (the kettle page's reviews below the fold got confirm 0.71 after two scrolls)
+      const notThere = scrollWords && !inView(page, scrollWords);
       const confirm = async () => {
         if (conf == null) {
           conf = r.confirm = await this.complete(page, goal, values, dialogs()).catch(() => 0);
+          if (notThere) conf = r.confirm = Math.min(conf, 0.3);
         }
         return conf;
       };
@@ -516,6 +552,9 @@ export class Agent {
       if (act.tool === "none") {
         const c = await confirm();
         if (c >= 0.65) { status = "done"; break; }
+        // a NAV_GOAL whose last click landed on the page its link named, and Jev wants no more
+        const at = NAV_GOAL.test(goal) && arrivedAt(page, history);
+        if (at && (done >= 0.3 || (r.action_done = await this.actionDone(page, goal, history, lastChange).catch(() => 0)) >= 0.4)) { status = "done"; info = `the last click opened the page its link "${String(at).slice(0, 60)}" named, and Jev sees nothing left to do`; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
         if (signedIn || (submitted && done >= 0.85)) { status = "done"; info = signedIn ? "signed in: the values were entered, the form was submitted and the sign-in form is gone" : "every given value was entered and the form was submitted to a new page without error"; break; }
         if (submitted && done >= 0.7) { status = "likely_done"; info = "every given value was entered and the form was submitted to a new page; verify with check or observe"; break; }
@@ -557,7 +596,7 @@ export class Agent {
         const [c, ad] = await Promise.all([confirm(), act.tool === "click" ? 0 : this.actionDone(page, goal, history, lastChange).catch(() => 0)]);
         if (ad) r.action_done = ad;
         if (c >= 0.65) { status = "done"; info = `the goal looks met; did not ${last.action} ${last.element} again`; break; }
-        if (ad >= 0.5) { status = "likely_done"; info = `the ${last.action} the goal asks for was done and changed the page, so it was not repeated; verify with check or observe`; break; }
+        if (ad >= 0.5 && !notThere) { status = "likely_done"; info = `the ${last.action} the goal asks for was done and changed the page, so it was not repeated; verify with check or observe`; break; }
       }
 
       // follow-up questions only for the chosen action
@@ -629,7 +668,7 @@ export class Agent {
           gate = "budget"; break;
         }
       }
-      const h = { action: act.tool, element: brief(act.el), id: act.target, url: page.url };
+      const h = { action: act.tool, element: brief(act.el), id: act.target, url: page.url, tag: act.el?.tag, name: act.el?.text || act.el?.label };
       if (act.tool === "select" && act.value != null) h.option = act.value;
       if (act.valueKey && ["type", "select", "upload"].includes(act.tool)) h.value = act.valueKey;
       if (act.key) h.key = act.key;
@@ -666,14 +705,17 @@ export class Agent {
       // in parallel: the page-only confirm, and whether the action the goal names (drag, scroll…)
       // was done. Goals that name an action cannot be confirmed from the page alone, but the
       // second question also says yes to partial progress, so it only earns likely_done.
-      const [c, ad] = await Promise.all([
+      let [c, ad] = await Promise.all([
         conf ?? this.complete(page, goal, values, dialogs()).catch(() => 0),
         r0 && r0.action_done != null ? r0.action_done : this.actionDone(page, goal, history, lastChange).catch(() => 0),
       ]);
+      if (scrollWords && !inView(page, scrollWords)) { c = Math.min(c, 0.3); ad = Math.min(ad, 0.3); }
       conf = c;
       if (rounds.length) Object.assign(rounds.at(-1), { confirm: c, action_done: ad });
       const why = status === "max_actions" ? "the action budget ran out" : status === "ambiguous" ? "the next target was unclear" : "a repeat or dead end was detected";
+      const at = NAV_GOAL.test(goal) && arrivedAt(page, history);
       if (c >= 0.65) { info = `${why} but the goal looks met`; status = "done"; }
+      else if (at && ad >= 0.4) { info = `${why}, but the last click opened the page its link "${String(at).slice(0, 60)}" named`; status = "done"; }
       else if (c >= 0.45) { info = `${why} but the goal may be met; verify with check or observe`; status = "likely_done"; }
       else if (ad >= 0.5) { info = `${why}, but the action the goal asks for was done and changed the page; verify with check or observe`; status = "likely_done"; }
     }
