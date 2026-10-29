@@ -31,7 +31,7 @@ To browse everything here, add the marketplace once with `/plugin marketplace ad
 
 Turn on auto-update once: in `/plugin`, open Marketplaces, select `vladimirli-plugins`, then Enable auto-update. A plugin changed by a push then updates in the background during your next session, and the new version loads in the session after that (or at once with `/reload-plugins`). Without auto-update, run `/plugin marketplace update vladimirli-plugins`.
 
-The plugins set no `version` in `plugin.json`, so every pushed commit that changes a plugin is a new version. Do not add one back: a pinned `version` stops updates until the string changes.
+The plugins set no `version` in `plugin.json`, so every pushed commit that changes a plugin is a new version. Do not add one back: a pinned `version` stops updates until the string changes. The version is the repository's commit, so any push updates all four plugins at once.
 
 A copy of a plugin with the same name in a `--plugin-dir` or `CLAUDE_CODE_PLUGIN_DIRS` folder replaces the marketplace copy silently, so remove such copies after you install from here.
 
