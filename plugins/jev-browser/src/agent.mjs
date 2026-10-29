@@ -17,6 +17,8 @@ const MAX_BUDGET = 30, EXTRA_ROUNDS = 5;
 const defaultBudget = (values) => Math.min(MAX_BUDGET, Math.max(20, 10 + Object.keys(values ?? {}).length));
 // goals that go to a place ("Open the site's pricing page"): the words naming it must be on the page
 const NAV_GOAL = /^\s*(open|go to|navigate to|visit|show)\b/i;
+// any goal that ends on a page it names ("Scroll down to the X link and open it")
+const NAV_ANY = /\b(open|go to|navigate to|visit)\b/i;
 const NAV_STOP = new Set("open go to navigate visit show the a an this that its it site site s website web page pages tab tabs link links section area category article view of on in for about and with from linked new main top first second last my our your me repository repo".split(" "));
 const IRREVERSIBLE_Q = { type: "noul", instructions: "Would the next action toward `task.goal` on `page` have an effect outside this browser that is hard to undo, such as placing an order, paying, sending a message, deleting data or publishing?" };
 const UNSURE = "the page looks done but Jev is unsure; verify with check or observe";
@@ -80,14 +82,18 @@ export function arrivedAt(page, history) {
   return hay.includes(phrase) ? last.name : null;
 }
 // "Scroll down to the customer reviews section": the words naming the place, or null for
-// other goals (and for goals that go on after the scroll: "... and open it")
+// other goals, goals that go on after the scroll ("... and open it"), and scrolls that load
+// content ("Scroll down to load more paragraphs": infinite scroll, no place to reach)
 const SCROLL_GOAL = /^\s*scroll\s+(?:(?:down|up)\s+)?(?:to|until)\s+(.+)$/i;
 export function scrollNames(goal) {
   const m = String(goal).match(SCROLL_GOAL);
-  if (!m || /\b(and|then)\b|,/.test(m[1])) return null;
+  if (!m || /\b(and|then)\b|,/.test(m[1]) || /^(load|show|reveal|get|fetch|trigger|display)\b|\b(load|loads|loaded|loading|more|new|next)\b/i.test(m[1])) return null;
   const words = norm(m[1]).split(" ").filter((w) => w.length >= 3 && !GOAL_STOP.has(w) && !/^(bottom|end|top|part|heading|you|see|reach|reached|visible|shown|appears)$/.test(w));
   return words.length ? words : null;
 }
+// the goal names this element: a content word of its name is in the goal (infinite-scroll's
+// footer link "Elemental Selenium" is a scroll target the goal never names)
+const goalNames = (el, goal) => { const g = ` ${norm(goal)} `; return norm(el?.text || el?.label || "").split(" ").some((w) => w.length >= 3 && !GOAL_STOP.has(w) && g.includes(` ${stem(w)}`)); };
 // every word in the text the viewport shows
 const inView = (page, words) => { const hay = ` ${norm(page.text)} `; return words.every((w) => hay.includes(` ${stem(w)}`)); };
 
@@ -493,6 +499,8 @@ export class Agent {
       // a scroll goal is not met while its named place is out of view, whatever the page has
       // (the kettle page's reviews below the fold got confirm 0.71 after two scrolls)
       const notThere = scrollWords && !inView(page, scrollWords);
+      const arrived = NAV_ANY.test(goal) && arrivedAt(page, history);
+      const arrivedInfo = `the last click opened the page its link "${String(arrived).slice(0, 60)}" named, and Jev sees nothing left to do`;
       const confirm = async () => {
         if (conf == null) {
           conf = r.confirm = await this.complete(page, goal, values, dialogs()).catch(() => 0);
@@ -528,6 +536,7 @@ export class Agent {
       if (!pendingSearch && done >= (round > 0 ? 0.5 : 0.9)) {
         const c = await confirm();
         if (c >= 0.65 || (c >= 0.45 && settled)) { status = "done"; if (c < 0.65) info = "every given value was entered and Jev sees nothing left to do"; break; }
+        if (c >= 0.45 && act.tool === "none" && arrived) { status = "done"; info = arrivedInfo; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
       }
       if (n("login") >= 0.7 && !Object.keys(values).length) { status = "needs_login"; info = "the page wants a sign-in and no values were given; pass credentials in values, or log in by hand in the jevb profile"; break; }
@@ -555,9 +564,8 @@ export class Agent {
       if (act.tool === "none") {
         const c = await confirm();
         if (c >= 0.65) { status = "done"; break; }
-        // a NAV_GOAL whose last click landed on the page its link named, and Jev wants no more
-        const at = NAV_GOAL.test(goal) && arrivedAt(page, history);
-        if (at && (done >= 0.3 || (r.action_done = await this.actionDone(page, goal, history, lastChange).catch(() => 0)) >= 0.4)) { status = "done"; info = `the last click opened the page its link "${String(at).slice(0, 60)}" named, and Jev sees nothing left to do`; break; }
+        // a goal that opens a page, whose last click landed on the page its link named, and Jev wants no more
+        if (arrived && (done >= 0.3 || (r.action_done = await this.actionDone(page, goal, history, lastChange).catch(() => 0)) >= 0.4)) { status = "done"; info = arrivedInfo; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
         if (signedIn || (submitted && done >= 0.85)) { status = "done"; info = signedIn ? "signed in: the values were entered, the form was submitted and the sign-in form is gone" : "every given value was entered and the form was submitted to a new page without error"; break; }
         if (submitted && done >= 0.7) { status = "likely_done"; info = "every given value was entered and the form was submitted to a new page; verify with check or observe"; break; }
@@ -580,6 +588,12 @@ export class Agent {
         status = "needs_value"; gate = "value"; pending = { op: "type", id: act.target, element: brief(act.el) };
         info = `the next step types into ${brief(act.el)} and no value was given; pass the text in values (e.g. {"${valueKeyFor(act.el)}": "..."}) and run do again, or type it with act`;
         break;
+      }
+      // "scroll down to the X link and open it" with X in view: Jev keeps scrolling past it
+      // (wiki: the lead's "Bletchley Park" scrolled away twice); do the goal's next action on it
+      if (/^scroll/.test(act.tool) && act.el && !act.el.off && !act.el.hidden && act.p_target >= 0.8 && /\b(and|then)\b/i.test(goal)) {
+        const alt = Object.entries(a.tool?.probabilities ?? {}).filter(([t]) => TARGETED.has(t) && t !== "type" && t !== "upload").sort((x, y) => y[1] - x[1])[0];
+        if (alt && alt[1] >= 0.02) { act.tool = alt[0]; r.tool = act.tool; r.in_view = true; }
       }
       if (TARGETED.has(act.tool) && (act.target == null || act.p_target < 0.3)) { status = "ambiguous"; info = "target confidence too low; act on a candidate directly, or make the goal more specific"; break; }
       const key = `${act.tool}|${act.target}|${act.valueKey ?? ""}|${page.url}|${page.text}|${page.elements.length}`;
@@ -685,8 +699,13 @@ export class Agent {
       tab.held = null;
       const since = Date.now();
       try {
-        const op = act.tool === "scroll_down" || act.tool === "scroll_up" ? "scroll" : act.tool;
-        const note = await tab.exec({ op, id: act.target ?? undefined, value: act.value, key: act.key, to: act.to, direction: act.tool === "scroll_up" ? "up" : "down" });
+        let op = act.tool === "scroll_down" || act.tool === "scroll_up" ? "scroll" : act.tool, note;
+        // a scroll toward a place the page already has goes there in one step: the off-screen
+        // element Jev targets and the goal names (wiki: "Bletchley Park" took 7 wheel steps of 640 px), or the
+        // heading a scroll goal names; else (not loaded yet) one wheel step
+        if (op === "scroll" && act.el?.off && !act.el.hidden && act.p_target >= 0.5 && goalNames(act.el, goal)) note = await tab.exec({ op: "reveal", id: act.target });
+        else if (op === "scroll" && notThere) note = await tab.exec({ op: "reveal", value: scrollWords.map(stem) }).catch(() => null);
+        note ??= await tab.exec({ op, id: act.target ?? undefined, value: act.value, key: act.key, to: act.to, direction: act.tool === "scroll_up" ? "up" : "down" });
         if (note) h.note = note;
         if (op === "type" && act.valueKey) this.typed.set(act.target, act.valueKey);
         await tab.settle({ since });
@@ -722,7 +741,7 @@ export class Agent {
       conf = c;
       if (rounds.length) Object.assign(rounds.at(-1), { confirm: c, action_done: ad });
       const why = status === "max_actions" ? "the action budget ran out" : status === "ambiguous" ? "the next target was unclear" : "a repeat or dead end was detected";
-      const at = NAV_GOAL.test(goal) && arrivedAt(page, history);
+      const at = NAV_ANY.test(goal) && arrivedAt(page, history);
       if (c >= 0.65) { info = `${why} but the goal looks met`; status = "done"; }
       else if (at && ad >= 0.4) { info = `${why}, but the last click opened the page its link "${String(at).slice(0, 60)}" named`; status = "done"; }
       else if (c >= 0.45) { info = `${why} but the goal may be met; verify with check or observe`; status = "likely_done"; }

@@ -391,6 +391,15 @@ export class Tab {
         }
         return last === before ? "nothing moved (at the end, or nothing scrollable there)" : `scrolled ${Math.round(last - before)}px`;
       }
+      // one step to a known place: an element by id (scrolled to the centre), or the text of a
+      // heading (`value`: word stems); a stepwise scroll is only for content not loaded yet
+      case "reveal": {
+        const before = await this.J("scrollSum");
+        if (id != null) { const l = await this.J("locate", id); if (!l.ok) throw new Error(`element ${id} is ${l.reason}`); }
+        else if (!(await this.J("revealText", value))) throw new Error("no such text on the page yet");
+        await sleep(40);
+        return `scrolled ${Math.round((await this.J("scrollSum")) - before)}px to bring it into view`;
+      }
       case "wait": {   // a number: sleep that many ms; otherwise until the page next changes (max 8 s)
         if (Number(value)) { await sleep(Math.min(Number(value), 10_000)); return ""; }
         const w = await this.waitChange(null, 8000);

@@ -5,7 +5,7 @@
 // (Playwright's rule), so ids survive re-snapshots and diffs make sense. Ids are never reused
 // within a session (the daemon passes the next free number to each new document), so an id
 // from a page that navigated away fails as "gone" instead of hitting another element.
-export const VERSION = 11;
+export const VERSION = 13;
 
 // COLLECTS is safety.mjs formCollects (passed in as source): what contact or payment details a form asks for.
 export const INSTALL = function (VERSION, COLLECTS) {
@@ -36,6 +36,13 @@ export const INSTALL = function (VERSION, COLLECTS) {
       break;
     }
     return n;
+  };
+  // The box to aim at: a link that wraps onto two lines has a bounding box whose centre is
+  // text between them (wiki figure captions), so use its largest line box
+  const boxOf = (el) => {
+    const rs = el.getClientRects();
+    if (rs.length < 2) return el.getBoundingClientRect();
+    return [...rs].reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
   };
   // contains() across shadow boundaries
   const within = (outer, n) => { for (; n; n = n.parentNode || n.host) if (n === outer) return true; return false; };
@@ -225,7 +232,7 @@ export const INSTALL = function (VERSION, COLLECTS) {
         if (m) o.row_state = m[1];
       }
       // geometry in top-level coordinates
-      const off = frameOffset(hit), rr = hit.getBoundingClientRect();
+      const off = frameOffset(hit), rr = boxOf(hit);
       const cx = off.x + rr.left + rr.width / 2, cy = off.y + rr.top + rr.height / 2;
       const inView = cx >= 0 && cy >= 0 && cx < W && cy < H;
       if (!hidden && !inView) o.off = cy < 0 ? "above" : cy >= H ? "below" : "side";
@@ -316,11 +323,11 @@ export const INSTALL = function (VERSION, COLLECTS) {
     const { el, hit } = rec;
     if (!hit.isConnected) return { ok: false, reason: "gone" };
     const W = innerWidth, H = innerHeight;
-    let off = frameOffset(hit), r = hit.getBoundingClientRect();
+    let off = frameOffset(hit), r = boxOf(hit);
     let cx = off.x + r.left + r.width / 2, cy = off.y + r.top + r.height / 2;
     if (scroll && (cx < 0 || cy < 0 || cx >= W || cy >= H || r.width < 1)) {
       hit.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-      off = frameOffset(hit); r = hit.getBoundingClientRect();
+      off = frameOffset(hit); r = boxOf(hit);
       cx = off.x + r.left + r.width / 2; cy = off.y + r.top + r.height / 2;
     }
     const fileish = el.tagName === "INPUT" && el.type === "file";
@@ -429,6 +436,16 @@ export const INSTALL = function (VERSION, COLLECTS) {
     let best = null;
     for (const el of document.querySelectorAll("body *")) { if (!scrolls(el)) continue; const b = box(el.getBoundingClientRect()); if (b && (!best || b.area > best.area)) best = b; }
     return best || { h: innerHeight, x: innerWidth / 2, y: innerHeight / 2 };
+  };
+  // Scroll the first heading (else the smallest element) whose text has every word (stems from
+  // the agent) into view, for a "scroll to <place>" goal. False when the page has no such text yet.
+  J.revealText = (stems) => {
+    const has = (t) => { const s = ` ${String(t).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ")} `; return stems.every((w) => s.includes(` ${w}`)); };
+    const pick = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role=heading], summary, legend, caption")].find((h) => visible(h) && has(h.innerText))
+      || [...document.querySelectorAll("body *")].filter((e) => e.childElementCount <= 3 && e.textContent.length < 300 && visible(e) && has(e.innerText)).at(-1);
+    if (!pick) return false;
+    pick.scrollIntoView({ block: "start", behavior: "instant" });
+    return true;
   };
   J.scrollSum = () => { let s = scrollY; for (const el of document.querySelectorAll("body *")) if (el.scrollTop) s += el.scrollTop; return s; };
   // Draw each element's [i] mark over the page for one screenshot (pointer-events: none, in a

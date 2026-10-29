@@ -23,5 +23,7 @@ test("scrollNames: the place a scroll goal names", () => {
   assert.deepEqual(scrollNames("Scroll to the footer"), ["footer"]);
   assert.equal(scrollNames("Scroll down to the bottom of the page"), null);
   assert.equal(scrollNames("Scroll down to the Bletchley Park link and open it"), null);
+  assert.equal(scrollNames("Scroll down to load more paragraphs"), null);
+  assert.equal(scrollNames("Scroll down until more items are loaded"), null);
   assert.equal(scrollNames("Add elements until there are exactly 3 Delete buttons"), null);
 });
