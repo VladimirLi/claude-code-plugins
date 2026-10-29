@@ -178,7 +178,9 @@ export class Agent {
   out(text, data = {}) { return { text: scrub(text, this.secrets), data: scrub(data, this.secrets) }; }
   events() { return this.tab.events.splice(0); }
 
-  async open({ url, viewport }) {
+  // A short summary by default (url, title, element count, the start of the visible text):
+  // the element table and full text cost up to ~12k chars; `full` (or observe full) prints them.
+  async open({ url, full = false }) {
     if (!/^[a-z]+:/i.test(url)) url = `https://${url}`;
     if (!domainAllowed(url)) return this.out(`status: blocked\ninfo: ${url} is outside JEVB_ALLOWED_DOMAINS`, { status: "blocked" });
     const t0 = Date.now();
@@ -186,7 +188,9 @@ export class Agent {
     const page = await this.tab.snapshot();
     this.shown = page;
     const ev = this.events();
-    return this.out(`opened in ${Date.now() - t0} ms${ev.length ? `\nevents: ${ev.join("; ")}` : ""}${page.captcha ? "\nwarning: the page shows a captcha or bot check (needs_human)" : ""}\n${renderPage(page)}`, { url: page.url, title: page.title, elements: page.elements.length, ms: Date.now() - t0 });
+    const inView = page.elements.filter((e) => !e.off && !e.hidden).length;
+    const view = full ? renderPage(page) : `url: ${page.url}\ntitle: ${page.title}\nelements: ${page.elements.length} (${inView} in view; observe full lists them with their ids)\n${fence(`visible text: ${page.text.slice(0, 400)}${page.text.length > 400 ? " …" : ""}${page.dialogs?.length ? `\ndialogs/overlays: ${page.dialogs.join(" || ").slice(0, 300)}` : ""}`)}`;
+    return this.out(`opened in ${Date.now() - t0} ms${ev.length ? `\nevents: ${ev.join("; ")}` : ""}${page.captcha ? "\nwarning: the page shows a captcha or bot check (needs_human)" : ""}\n${view}`, { url: page.url, title: page.title, elements: page.elements.length, ms: Date.now() - t0 });
   }
 
   async observe({ mode = "full", query } = {}) {

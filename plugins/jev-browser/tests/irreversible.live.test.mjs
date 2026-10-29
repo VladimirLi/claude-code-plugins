@@ -21,7 +21,7 @@ const CHECKOUT = "data:text/html," + encodeURIComponent(`<title>Checkout</title>
 <script>window.placed = false; f.addEventListener("submit", (e) => { e.preventDefault(); window.placed = true; out.textContent = "Order placed"; });</script>`);
 
 function openCheckout(s) {
-  const out = run(s, "open", CHECKOUT);
+  const out = run(s, "open", CHECKOUT, "--full");
   const id = (re) => Number(out.match(new RegExp(`\\[(\\d+)\\] ${re}`))?.[1]);
   return { card: id('input:text label="Card number'), place: id('button "Place order"'), next: id('button "Next"') };
 }

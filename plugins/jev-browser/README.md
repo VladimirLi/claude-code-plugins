@@ -31,7 +31,7 @@ Each session opens its own window in your Chrome. Pages keep your real window si
 
 ```
 jevb [--session NAME] [--fresh] <command>
-  open <url>
+  open <url> [--full]            prints a summary; --full adds the element table (as observe full)
   do <goal> [--values JSON] [--max N] [--allow-irreversible] [--vision]
   act <op> [id] [value]          e.g. act click 12 · act type 7 "hello" · act select 5 "Two"
   act '<JSON list>' [--values JSON] [--allow-irreversible]

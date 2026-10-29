@@ -13,8 +13,8 @@ const str = (description) => ({ type: "string", description });
 const TOOLS = [
   {
     name: "open",
-    description: `Open a URL in this session's tab of the dedicated, warm Chrome and return the page's element table ([id] role "name" state). Ids are sticky across observations and never reused after navigation. ${UNTRUSTED}`,
-    inputSchema: { type: "object", properties: { url: str("URL to load"), fresh: { type: "boolean", description: "First call only: use an empty browser context (no cookies or storage from the profile)" } }, required: ["url"] },
+    description: `Open a URL in this session's tab of the dedicated, warm Chrome and return a short summary: url, title, element count and the start of the visible text. For the element table ([id] role "name" state) call observe (mode full), or pass full=true. Ids are sticky across observations and never reused after navigation. ${UNTRUSTED}`,
+    inputSchema: { type: "object", properties: { url: str("URL to load"), full: { type: "boolean", description: "Also return the element table and visible text (as observe full)" }, fresh: { type: "boolean", description: "First call only: use an empty browser context (no cookies or storage from the profile)" } }, required: ["url"] },
   },
   {
     name: "do",

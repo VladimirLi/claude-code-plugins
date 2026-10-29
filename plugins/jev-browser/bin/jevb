@@ -8,7 +8,8 @@ import { SHOTS } from "../src/paths.mjs";
 
 const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SESSION or "default"; one tab per session)
 
-  open <url>                                   load a page; prints the element table
+  open <url> [--full]                          load a page; prints url, title, element count and the start
+                                               of the visible text (--full: the element table, as observe full)
   do <goal> [--values JSON] [--max N] [--allow-irreversible] [--vision]
                                                let Jev reach one observable outcome; values are typed by key
                                                (no values and the goal needs text: status needs_value, with a field: line)
@@ -39,6 +40,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--vision") flags.vision = true;
   else if (a === "--json") flags.json = true;
   else if (a === "--fresh") flags.fresh = true;
+  else if (a === "--full") flags.full = true;
   else if (a === "-h" || a === "--help") { console.log(USAGE); process.exit(0); }
   else pos.push(a);
 }
@@ -81,7 +83,7 @@ function parseAct() {
 const client = new Client();
 let op = cmd, args = {};
 switch (cmd) {
-  case "open": if (!rest[0]) fail("open needs a url"); args = { url: rest[0] }; break;
+  case "open": if (!rest[0]) fail("open needs a url"); args = { url: rest[0], full: !!flags.full }; break;
   case "do": if (!rest.length) fail("do needs a goal"); args = { goal: rest.join(" "), values: values(), max_actions: flags.max, allow_irreversible: !!flags.allow, vision: !!flags.vision }; break;
   case "act": args = { actions: parseAct(), values: values(), allow_irreversible: !!flags.allow }; break;
   case "observe": args = { mode: rest[0] || "full", query: rest.slice(1).join(" ") || undefined }; break;
