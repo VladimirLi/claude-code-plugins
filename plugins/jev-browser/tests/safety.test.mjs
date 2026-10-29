@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { irreversibleRule, gateRule, SUBMIT_GUARD, dialogRisky, redactValues, scrub, fence, secretsOf } from "../src/safety.mjs";
+import { irreversibleRule, gateRule, SUBMIT_GUARD, dialogRisky, redactValues, scrub, fence, secretsOf, formCollects } from "../src/safety.mjs";
 import { pageDiff, renderPage } from "../src/format.mjs";
 
 const page = (url, text, elements = []) => ({ url, title: "", text, elements, dialogs: [] });
@@ -41,6 +41,42 @@ test("gate: Enter in a field is judged by the button it submits", () => {
 test("the in-page submit guard carries the same rule", () => {
   assert.doesNotThrow(() => new Function(SUBMIT_GUARD));
   assert.match(SUBMIT_GUARD, /place \(the/);
+  assert.match(SUBMIT_GUARD, /COLLECTS = function formCollects/);
+});
+
+test("formCollects: contact and payment fields in any language; logins, searches and plain forms collect none", () => {
+  const f = (type, name, label, extra = {}) => ({ type, name, id: "", label, placeholder: "", ...extra });
+  // a Swedish booking form: by input type, and by attribute or label words alone
+  assert.equal(formCollects([f("text", "namn", "Namn"), f("email", "epost", "E-post"), f("tel", "telefon", "Telefon"), f("text", "adress", "Adress")]), "email, phone, address");
+  assert.equal(formCollects([f("text", "f1", "Namn"), f("text", "f2", "E-postadress")]), "email, address");
+  assert.equal(formCollects([f("text", "x", "", { autocomplete: "cc-number" })]), "card");
+  assert.equal(formCollects([f("text", "iban", "IBAN")]), "card");
+  // sign-in forms (even by e-mail), searches, a name or postal code alone, and the Selenium web form
+  assert.equal(formCollects([f("text", "username", "Username"), f("password", "password", "Password"), f("submit", "", "")]), "");
+  assert.equal(formCollects([f("email", "email", "Email"), f("password", "password", "Password")]), "");
+  assert.equal(formCollects([f("search", "q", "Search"), f("text", "query", "Search addresses")]), "");
+  assert.equal(formCollects([f("text", "firstName", "", { placeholder: "First Name" }), f("text", "lastName", "Last Name"), f("text", "postalCode", "Zip/Postal Code")]), "");
+  assert.equal(formCollects([f("text", "my-text", "Text input"), f("password", "my-password", "Password"), f("textarea", "my-textarea", "Textarea"), f("select", "my-select", "Dropdown (select)"), f("text", "my-date", "Date picker"), f("radio", "my-radio", "Default radio")]), "");
+  // a sign-up form (password plus contact fields) does collect them
+  assert.equal(formCollects([f("text", "name", "Name"), f("email", "email", "Email"), f("password", "pw", "Password")]), "email");
+});
+
+test("gate: submitting a form that collects contact details pauses whatever the button says", () => {
+  const p = page("https://stad.example/boka", "Boka din provstädning");
+  const col = "email, phone";
+  assert.match(gateRule("click", { tag: "button", text: "Boka din provstädning nu", submits: true, collects: col }, p), /collects contact or payment details \(email, phone\)/);
+  assert.ok(gateRule("click", { tag: "input:submit", text: "Skicka bokning", submits: true, collects: col }, p));
+  assert.ok(gateRule("press_enter", { tag: "input:email", label: "E-post", submitter: "Skicka bokning", collects: col }, p));
+  assert.ok(gateRule("press_key", null, p, { key: "Enter", focused: { tag: "input:tel", label: "Telefon", collects: col } }));
+  assert.ok(gateRule("press_key", null, p, { key: "Space", focused: { tag: "button", text: "Skicka", submits: true, collects: col } }));
+  // not a submit: a plain button in that form, typing, Enter in a textarea, Space in a field
+  assert.equal(gateRule("click", { tag: "button", text: "Visa fler tider", collects: col }, p), null);
+  assert.equal(gateRule("type", { tag: "input:email", collects: col }, p), null);
+  assert.equal(gateRule("press_enter", { tag: "textarea", label: "Meddelande", collects: col }, p), null);
+  assert.equal(gateRule("press_key", { tag: "input:text", collects: col }, p, { key: "Space" }), null);
+  // forms that collect nothing still pass (login, web form)
+  assert.equal(gateRule("click", { tag: "button", text: "Login", submits: true }, page("https://x/login", "")), null);
+  assert.equal(gateRule("click", { tag: "button", text: "Submit", submits: true }, page("https://x/web-form.html", "Web form")), null);
 });
 
 test("risky dialogs", () => {

@@ -18,6 +18,7 @@ const defaultBudget = (values) => Math.min(MAX_BUDGET, Math.max(20, 10 + Object.
 // goals that go to a place ("Open the site's pricing page"): the words naming it must be on the page
 const NAV_GOAL = /^\s*(open|go to|navigate to|visit|show)\b/i;
 const NAV_STOP = new Set("open go to navigate visit show the a an this that its it site site s website web page pages tab tabs link links section area category article view of on in for about and with from linked new main top first second last my our your me repository repo".split(" "));
+const IRREVERSIBLE_Q = { type: "noul", instructions: "Would the next action toward `task.goal` on `page` have an effect outside this browser that is hard to undo, such as placing an order, paying, sending a message, deleting data or publishing?" };
 const UNSURE = "the page looks done but Jev is unsure; verify with check or observe";
 // words of any goal that name no thing on a page (verbs, fillers): the rest must show up in the
 // visible text or elements, or the page may not be showing what the goal is about yet
@@ -85,7 +86,7 @@ function repeated(elements) {
 const forJev = (page, typed, boxes) => ({
   url: page.url, title: page.title, text: page.text, dialogs: page.dialogs?.length ? page.dialogs : undefined, tables: page.tables, metrics: page.metrics,
   repeated_elements: repeated(page.elements),
-  elements: page.elements.map(({ id, new: _n, submitter: _s, ...e }) => ({ i: id, ...e, ...(e.value === "[filled]" && typed?.has(id) ? { value: `[filled with values.${typed.get(id)}]` } : {}), ...(boxes?.[id] ? { box: boxes[id] } : {}) })),
+  elements: page.elements.map(({ id, new: _n, submitter: _s, submits: _b, collects: _c, ...e }) => ({ i: id, ...e, ...(e.value === "[filled]" && typed?.has(id) ? { value: `[filled with values.${typed.get(id)}]` } : {}), ...(boxes?.[id] ? { box: boxes[id] } : {}) })),
 });
 
 // forJev within the single-request budget: big pages (Wikipedia, HN) keep the first elements
@@ -120,6 +121,11 @@ function resumeLine(p) {
 }
 // what Enter or Space without a target would press: the focused element, as a gate brief
 const needsFocused = (op, id, key) => op === "press_key" && id == null && /^(Enter|NumpadEnter|Space| )$/.test(String(key ?? ""));
+// an act step that submits a form: a click on its submit button, or Enter in one of its fields
+const submitsForm = (op, el, key) => !!el && (["click", "dblclick"].includes(op) ? !!el.submits
+  : (op === "press_enter" || (op === "press_key" && /^(Enter|NumpadEnter)$/.test(String(key ?? "")))) && !!(el.submits || el.submitter || el.collects));
+// the info line for a submit the in-page guard stopped
+const heldInfo = (h) => (h.collects ? `the action submitted a form that collects contact or payment details (${h.collects}) by "${h.submit}"; the submit was stopped` : `the action submitted a form whose button "${h.submit}" commits something outside the browser; the submit was stopped`);
 
 function repeatsBlock(seq, k, times) {
   if (seq.length < k * times) return false;
@@ -193,7 +199,7 @@ export class Agent {
     const ids = actions.flatMap((a) => [a.id, a.to]).filter((x) => x != null).map(Number);
     const known = await this.tab.eval(`(() => { const J = window.__jevb; return ${JSON.stringify(ids)}.filter(i => !J || !J.els.has(i) || !J.els.get(i).el.isConnected) })()`).catch(() => ids);
     if (known.length) throw new Error(`unknown or stale element id(s) ${known.join(", ")}; observe again`);
-    const results = []; let status = "ok", pending, info;
+    const results = []; let status = "ok", pending, info, asked = false;
     const url0 = await this.tab.url();
     if (allow_irreversible) await this.tab.allowSubmits(true);
     try {
@@ -206,6 +212,13 @@ export class Agent {
       const focused = !allow_irreversible && needsFocused(op, a.id, key) ? await this.tab.J("focused").catch(() => null) : null;
       const rule = !allow_irreversible && gateRule(op, el, before, { key, focused });
       if (rule) { status = "needs_confirmation"; pending = { op, id: a.id, element: brief(el ?? focused), ...(op === "press_key" ? { key } : {}) }; info = `${rule}; repeat with allow_irreversible to do it`; break; }
+      // a step that submits a form: Jev's irreversible question, once per call; it can add a
+      // pause, never remove one (the code rule above already ran)
+      if (!allow_irreversible && !asked && submitsForm(op, el ?? focused, key)) {
+        asked = true;
+        const p = await this.irreversible(before, `${op === "dblclick" ? "click" : op} ${brief(el ?? focused)}`).catch(() => 0);
+        if (p >= 0.6) { status = "needs_confirmation"; pending = { op, id: a.id, element: brief(el ?? focused), ...(op === "press_key" ? { key } : {}) }; info = `Jev rates this form submit as hard to undo (${p.toFixed(2)}); repeat with allow_irreversible to do it`; break; }
+      }
       this.tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
       this.tab.held = null;
       const since = Date.now();
@@ -219,7 +232,7 @@ export class Agent {
       }
       if (this.tab.held) {
         status = "needs_confirmation";
-        info = this.tab.held.submit ? `the action submitted a form whose button "${this.tab.held.submit}" commits something outside the browser; the submit was stopped; repeat with allow_irreversible` : `a "${this.tab.held.message.slice(0, 80)}" dialog looked irreversible and was dismissed; repeat with allow_irreversible`;
+        info = this.tab.held.submit ? `${heldInfo(this.tab.held)}; repeat with allow_irreversible` : `a "${this.tab.held.message.slice(0, 80)}" dialog looked irreversible and was dismissed; repeat with allow_irreversible`;
         pending = { op, id: a.id, element: brief(el), ...(op === "press_key" ? { key } : {}) };
         break;
       }
@@ -256,7 +269,7 @@ export class Agent {
       blocked: { type: "noul", instructions: "Is there something on `page` that stops progress on `task.goal` and cannot be handled by clicking or typing (captcha, access denied, error page)?" },
       error: { type: "noul", instructions: "Does `page` show an error or rejection message (e.g. invalid credentials, a validation error, not found) caused by the actions in `task.history`?" },
       login: { type: "noul", instructions: "Is `page` a sign-in or sign-up screen, or asking the user to log in, before `task.goal` can continue?" },
-      irreversible: { type: "noul", instructions: "Would the next action toward `task.goal` on `page` have an effect outside this browser that is hard to undo, such as placing an order, paying, sending a message, deleting data or publishing?" },
+      irreversible: IRREVERSIBLE_Q,
       tool: { type: "choice", instructions: "What is the next action toward `task.goal` on `page`, given what `task.history` already did?", criteria: tools },
     };
     if (hasValues) common.value = { type: "choice", instructions: "If the next action toward `task.goal` types, selects or uploads something, which of `task.values` should it use? Prefer values not yet entered on `page`.", criteria: Object.fromEntries(Object.entries(shownValues).map(([k, v]) => [k, v])) };
@@ -350,6 +363,12 @@ export class Agent {
       miss = words.filter((w) => !hay.includes(` ${stem(w)}`));
     }
     return miss.length ? miss : null;
+  }
+
+  // Jev's irreversible question (the one `do` asks each round) for one act step, named as the goal
+  async irreversible(page, step) {
+    const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal: step, history: [] } }, this.secrets), { irreversible: IRREVERSIBLE_Q });
+    return +(x.answers.irreversible?.noul ?? 0).toFixed(2);
   }
 
   // A screenshot with each in-view element's [i] mark drawn on it.
@@ -628,7 +647,7 @@ export class Agent {
       const dl = tab.dialogsSince(since);
       if (dl.length) h.dialog = dl.join("; ");
       history.push(h);
-      if (tab.held?.submit) { status = "needs_confirmation"; info = `the action submitted a form whose button "${tab.held.submit}" commits something outside the browser; the submit was stopped`; pending = { op: h.action, id: act.target, element: h.element, ...(act.key ? { key: act.key } : {}) }; gate = "submit"; break; }
+      if (tab.held?.submit) { status = "needs_confirmation"; info = heldInfo(tab.held); pending = { op: h.action, id: act.target, element: h.element, ...(act.key ? { key: act.key } : {}) }; gate = "submit"; break; }
       if (tab.held) { status = "needs_confirmation"; info = "the action opened a confirmation dialog that looks irreversible, so it was dismissed; repeat with allow_irreversible to accept it"; pending = { op: h.action, id: act.target, element: h.element, dialog: tab.held.message }; break; }
       const u = await tab.url();
       if (!domainAllowed(u)) { await tab.exec({ op: "back" }).catch(() => {}); status = "blocked"; info = `navigation to ${u} is outside JEVB_ALLOWED_DOMAINS`; break; }

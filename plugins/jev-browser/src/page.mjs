@@ -5,9 +5,10 @@
 // (Playwright's rule), so ids survive re-snapshots and diffs make sense. Ids are never reused
 // within a session (the daemon passes the next free number to each new document), so an id
 // from a page that navigated away fails as "gone" instead of hitting another element.
-export const VERSION = 10;
+export const VERSION = 11;
 
-export const INSTALL = function (VERSION) {
+// COLLECTS is safety.mjs formCollects (passed in as source): what contact or payment details a form asks for.
+export const INSTALL = function (VERSION, COLLECTS) {
   if (window.__jevb && window.__jevb.v === VERSION) return window.__jevb;
   const SEL = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=option], [role=combobox], [role=textbox], [role=searchbox], [role=slider], [role=spinbutton], [role=treeitem], [contenteditable=""], [contenteditable=true], [onclick], [oncontextmenu], [ondblclick], [draggable=true], [tabindex]:not([tabindex="-1"])';
   const clean = (s, n = 80) => String(s || "").replace(/\s+/g, " ").trim().slice(0, n);
@@ -60,6 +61,15 @@ export const INSTALL = function (VERSION) {
     const b = defaultButton(el.form || el.closest("form"));
     return b ? clean(b.tagName === "INPUT" ? (b.value || b.alt || b.getAttribute("aria-label")) : (b.innerText || b.getAttribute("aria-label") || b.title), 60) : "";
   };
+  // per snapshot: the kinds of contact or payment details each form collects ("" for none)
+  let formCache = new Map();
+  const collectsOf = (f) => {
+    if (!f || !COLLECTS) return "";
+    if (!formCache.has(f)) formCache.set(f, COLLECTS([...f.elements].map((x) => ({ type: x.tagName === "INPUT" ? (x.getAttribute("type") || "text") : x.tagName.toLowerCase(), name: x.name, id: x.id, autocomplete: x.getAttribute("autocomplete"), label: labelOf(x), placeholder: x.getAttribute("placeholder") }))));
+    return formCache.get(f);
+  };
+  const formOf = (el) => el.form || el.closest?.("form");
+  const isSubmit = (el) => (el.tagName === "BUTTON" && (el.getAttribute("type") || "submit").toLowerCase() === "submit") || (el.tagName === "INPUT" && /^(submit|image)$/i.test(el.type));
   const cls = (n) => String(n?.className?.baseVal ?? n?.className ?? "");
   const FILLER = /^(selected|active|open|checked|disabled|hover|focus|show|hide|hidden|fade|flex|grid|block|inline|items|justify|center|rounded|text|font|medium|bold|icon|btn|absolute|relative|fixed|sticky|static|top|bottom|left|right|full|auto|none|border|shadow|ring|offset|background|transition|colors|duration|ease|cursor|pointer|outline|group|container|wrapper|inner|outer|root|item|link|only|content|overflow|truncate|nowrap|gap|space|default|base|mui|css|style|component|wrap)$/i;
   const hintOf = (el) => {
@@ -120,7 +130,7 @@ export const INSTALL = function (VERSION) {
   };
 
   J.snapshot = ({ start = 1, maxEls = 4000 } = {}) => {
-    hidCache = new Map(); srCache = new Map();
+    hidCache = new Map(); srCache = new Map(); formCache = new Map();
     if (J.next < start) J.next = start;
     const { all, xframes } = collect();
     const out = [], boxes = {}, seen = new Set(), now = new Set(), W = innerWidth, H = innerHeight;
@@ -190,6 +200,11 @@ export const INSTALL = function (VERSION) {
       if (href && !href.startsWith("javascript")) {
         try { const u = new URL(href, el.ownerDocument.location.href); o.href = clean(u.origin === location.origin ? u.pathname + u.search + u.hash : u.href, 80); } catch { o.href = clean(href, 80); }
       }
+      // a submit button, and what its form (or a field's form) collects: the gate pauses on
+      // submitting contact or payment details whatever the button says
+      const form = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName) ? formOf(el) : null;
+      if (form && isSubmit(el)) o.submits = true;
+      const col = form ? collectsOf(form) : ""; if (col) o.collects = col;
       if (el.disabled || el.getAttribute("aria-disabled") === "true") o.disabled = true;
       if (el.getAttribute("aria-busy") === "true") o.busy = true;
       const srt = el.getAttribute("aria-sort");   // class names (headerSortDown…) mean opposite things on different sites
@@ -356,7 +371,9 @@ export const INSTALL = function (VERSION) {
     }
     if (!a || a === document.body || a === document.documentElement) return null;
     const tag = a.tagName.toLowerCase(), type = tag === "input" ? (a.getAttribute("type") || "text").toLowerCase() : null;
-    return { tag: type ? `input:${type}` : tag, text: clean(type ? (/^(submit|button|reset|image)$/.test(type) ? a.value || a.alt : "") : a.innerText), label: labelOf(a), submitter: submitterOf(a) || undefined };
+    const f = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(a.tagName) ? formOf(a) : null;
+    formCache = new Map();
+    return { tag: type ? `input:${type}` : tag, text: clean(type ? (/^(submit|button|reset|image)$/.test(type) ? a.value || a.alt : "") : a.innerText), label: labelOf(a), submitter: submitterOf(a) || undefined, submits: (f && isSubmit(a)) || undefined, collects: (f && collectsOf(f)) || undefined };
   };
   J.focus = (id) => { const el = target(id); el.focus({ preventScroll: true }); return el.ownerDocument.activeElement === el || el.contains(el.ownerDocument.activeElement); };
   J.selectAll = (id) => {

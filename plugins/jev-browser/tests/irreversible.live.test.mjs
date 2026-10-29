@@ -68,3 +68,58 @@ test("checkout: do never places the order without allow_irreversible", live, () 
     assert.equal(placed(s), false);
   } finally { run(s, "close"); }
 });
+
+// A Swedish booking form: no button word is on the English list, but the form collects contact
+// details (by input type, and by attribute words for the address), so every submit pauses.
+const BOOKING = "data:text/html," + encodeURIComponent(`<meta charset="utf-8"><title>Boka provstädning</title><h1>Boka din provstädning</h1>
+<form id="f"><label>Namn <input name="namn"></label> <label>E-post <input type="email" name="epost"></label>
+<label>Telefon <input type="tel" name="telefon"></label> <label>Adress <input name="adress"></label>
+<button>Boka din provstädning nu</button> <input type="submit" value="Skicka bokning"></form>
+<button type="button" id="next" onclick="document.getElementById('f').requestSubmit()">Nästa</button>
+<form id="g"><label>Användarnamn <input name="username"></label> <label>Lösenord <input type="password" name="password"></label> <button>Logga in</button></form>
+<div id="out"></div>
+<script>window.placed = false; window.loggedIn = false; f.addEventListener("submit", (e) => { e.preventDefault(); window.placed = true; out.textContent = "Tack för din bokning"; });
+g.addEventListener("submit", (e) => { e.preventDefault(); window.loggedIn = true; out.textContent = "Inloggad"; });</script>`);
+
+function openBooking(s) {
+  run(s, "open", BOOKING);
+  const out = run(s, "observe", "full");
+  const id = (re) => Number(out.match(new RegExp(`\\[(\\d+)\\] ${re}`))?.[1]);
+  return { email: id('input:email label="E-post'), boka: id('button "Boka din'), skicka: id('input:submit "Skicka bokning'), next: id('button "Nästa'), login: id('button "Logga in') };
+}
+
+test("booking form in Swedish: submitting contact details pauses; a login form beside it does not", live, () => {
+  const s = "test-booking";
+  try {
+    const ids = openBooking(s);
+    assert.ok(Object.values(ids).every(Boolean), JSON.stringify(ids));
+    for (const args of [["click", ids.boka], ["click", ids.skicka], ["press_enter", ids.email]]) {
+      const out = run(s, "act", ...args.map(String));
+      assert.equal(status(out), "needs_confirmation", `${args.join(" ")}\n${out}`);
+      assert.match(out, /collects contact or payment details/);
+      assert.equal(placed(s), false, args.join(" "));
+    }
+    // the page's own script submits: the in-page guard stops it too
+    let out = run(s, "act", "click", String(ids.next));
+    assert.equal(status(out), "needs_confirmation", out);
+    assert.match(out, /submit was stopped/);
+    assert.equal(placed(s), false);
+    // the login form collects no contact details: it submits
+    out = run(s, "act", "click", String(ids.login));
+    assert.equal(status(out), "ok", out);
+    assert.equal(JSON.parse(run(s, "eval", "() => window.loggedIn")), true);
+    out = run(s, "act", "click", String(ids.skicka), "--allow-irreversible");
+    assert.equal(status(out), "ok", out);
+    assert.equal(placed(s), true);
+  } finally { run(s, "close"); }
+});
+
+test("booking form in Swedish: do fills it in but never sends it without allow_irreversible", live, () => {
+  const s = "test-booking-do";
+  try {
+    run(s, "open", BOOKING);
+    const out = run(s, "do", "Fill in the booking form and book the cleaning", "--values", JSON.stringify({ name: "Ada Lovelace", email: "ada@example.com", phone: "0701234567", address: "Storgatan 1" }));
+    assert.equal(status(out), "needs_confirmation", out);
+    assert.equal(placed(s), false);
+  } finally { run(s, "close"); }
+});

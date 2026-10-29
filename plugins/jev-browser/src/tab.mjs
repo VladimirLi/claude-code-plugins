@@ -2,12 +2,12 @@
 // network and navigation for the settler, handles dialogs, and executes actions with CDP Input
 // at fresh coordinates after a hit test.
 import { INSTALL, VERSION, MUTATION_WATCH } from "./page.mjs";
-import { dialogRisky, SUBMIT_GUARD } from "./safety.mjs";
+import { dialogRisky, SUBMIT_GUARD, formCollects } from "./safety.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
 export const VIEWPORT = { width: 1280, height: 800 };
-const SNAP = `(${INSTALL.toString()})(${VERSION})`;
+const SNAP = `(${INSTALL.toString()})(${VERSION}, ${formCollects})`;
 
 const KEYS = {
   Enter: { code: "Enter", vk: 13, text: "\r" }, Escape: { code: "Escape", vk: 27 }, Tab: { code: "Tab", vk: 9 },
@@ -110,8 +110,12 @@ export class Tab {
   // (set again before each action while on: a new document starts with submits guarded)
   async allowSubmits(on) { this.allow = !!on; await this.eval(`window.__jevbAllow = ${on ? "true" : "false"}`).catch(() => {}); }
   async takeHeld() {
-    const l = await this.eval("(() => { const l = window.__jevbHeldSubmit; window.__jevbHeldSubmit = undefined; return l || null })()").catch(() => null);
-    if (l) { this.held = { message: `form submit by "${l}" was stopped`, submit: l }; this.events.push(`stopped a form submit by "${l}" (irreversible)`); }
+    const h = await this.eval("(() => { const l = window.__jevbHeldSubmit; window.__jevbHeldSubmit = undefined; return l || null })()").catch(() => null);
+    if (h) {
+      const l = h.label ?? String(h);
+      this.held = { message: `form submit by "${l}" was stopped`, submit: l, collects: h.collects || undefined };
+      this.events.push(`stopped a form submit by "${l}" (${h.collects ? `the form collects ${h.collects}` : "irreversible"})`);
+    }
     return this.held;
   }
 
