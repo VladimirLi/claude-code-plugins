@@ -1,6 +1,5 @@
 {
   "name": "switchboard",
-  "version": "0.2.0",
   "description": "/mods lists every mod (this session's mods and installed plugins with a hooks module) and turns each on or off",
   "author": {
     "name": "VladimirLi",

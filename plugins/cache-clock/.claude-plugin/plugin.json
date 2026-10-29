@@ -1,6 +1,5 @@
 {
   "name": "cache-clock",
-  "version": "0.1.1",
   "description": "Status line countdown until this chat's prompt cache goes cold, a warning before it does, and /keepwarm to keep it warm with a hidden fork",
   "author": {
     "name": "VladimirLi",

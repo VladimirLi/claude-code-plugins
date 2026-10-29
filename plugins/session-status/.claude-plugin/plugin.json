@@ -1,6 +1,5 @@
 {
   "name": "session-status",
-  "version": "0.3.0",
   "description": "Session status and focus: a fixed goal with a done line, a gate before side work (Fork/Park/Now), a resume card after pauses; what is happening now, plan progress, and the decisions Claude needs from you as hotkeys; /standing opens the full status and plan",
   "author": {
     "name": "VladimirLi",
