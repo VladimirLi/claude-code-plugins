@@ -33,7 +33,7 @@ const TOOLS = [
   },
   {
     name: "act",
-    description: `Run your own actions by element id, in order. Ids are checked first; stops at the first error, a navigation, or a gated irreversible action. Returns per-action results and what changed (diff), or the new page after navigation. ops: click, dblclick, right_click, hover, check, uncheck, type (replaces content), clear, select (native <select> option label), press_enter, press_key (key: Escape, Tab, ArrowDown, …), upload (value = absolute file path), drag (to = drop target id), scroll (direction up/down, id = optional box), wait (value = ms), back, navigate (value = url). ${UNTRUSTED}`,
+    description: `Run your own actions by element id, in order. Ids are checked first; stops at the first error, a navigation, or a gated irreversible action. Returns per-action results and what changed (diff), or the new page after navigation. ops: click, dblclick, right_click, hover, check, uncheck, type (replaces content), clear, select (native <select> option label), press_enter, press_key (key: Escape, Tab, ArrowDown, …), upload (value = absolute file path), drag (to = drop target id), scroll (direction up/down, id = optional box), wait (no value: until the page next changes, max 8 s; value = ms: a fixed sleep), back, navigate (value = url). ${UNTRUSTED}`,
     inputSchema: {
       type: "object",
       properties: {

@@ -181,6 +181,19 @@ export class Tab {
     return now() - t0;
   }
 
+  // Wait for the page to change after snapshot `page` (its `at` stamp): the next DOM mutation,
+  // a new document, or `cap` ms. Then settle. For pages that wait on a timer (spinners, delayed
+  // content), where settle() alone returns at once because nothing is moving.
+  async waitChange(page, cap = 8000) {
+    const t0 = now();
+    let r = { changed: false };
+    try { r = await this.J("waitChange", page?.at ?? null, cap); }
+    catch { r = { changed: true }; await this.waitDoc(10_000); }   // navigated mid-wait
+    if (this.loading) r.changed = true;
+    await this.settle({ cap: 2000 });
+    return { changed: !!r.changed, ms: now() - t0 };
+  }
+
   async navigate(url) {
     this.events.length = 0;
     const since = now();
@@ -332,7 +345,11 @@ export class Tab {
         }
         return last === before ? "nothing moved (at the end, or nothing scrollable there)" : `scrolled ${Math.round(last - before)}px`;
       }
-      case "wait": await sleep(Math.min(Number(value) || 500, 5000)); return "";
+      case "wait": {   // a number: sleep that many ms; otherwise until the page next changes (max 8 s)
+        if (Number(value)) { await sleep(Math.min(Number(value), 10_000)); return ""; }
+        const w = await this.waitChange(null, 8000);
+        return w.changed ? `page changed after ${Math.round(w.ms)} ms` : `no change in ${Math.round(w.ms / 1000)} s`;
+      }
       case "back": this.loading = true; await this.eval("history.back()").catch(() => {}); await sleep(50); if (!this.inflight.size) this.loading = false; return "";
       case "navigate": await this.navigate(String(value)); return "";
       default: throw new Error(`unknown op "${op}"`);

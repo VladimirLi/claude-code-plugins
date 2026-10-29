@@ -5,7 +5,7 @@
 // (Playwright's rule), so ids survive re-snapshots and diffs make sense. Ids are never reused
 // within a session (the daemon passes the next free number to each new document), so an id
 // from a page that navigated away fails as "gone" instead of hitting another element.
-export const VERSION = 6;
+export const VERSION = 9;
 
 export const INSTALL = function (VERSION) {
   if (window.__jevb && window.__jevb.v === VERSION) return window.__jevb;
@@ -82,7 +82,39 @@ export const INSTALL = function (VERSION) {
     return { all, xframes };
   };
 
+  // Text a sighted user cannot see, though it has a box: invisible or transparent (closed
+  // mega-menus), or clipped screen-reader-only text (.sr-only, .visually-hidden). Cached per
+  // element for one snapshot. checkVisibility() already covers ancestors' opacity and
+  // visibility, so it runs once, on the nearest ancestor with a box (a `display: contents`
+  // wrapper has none and always fails it: GitHub's PR list sits in several). The clip test
+  // walks up, since .sr-only clips a container, not the text's own parent.
+  let hidCache = new Map(), srCache = new Map();
+  const srOnly = (el) => {
+    if (!el || el.nodeType !== 1 || el === document.body) return false;
+    if (srCache.has(el)) return srCache.get(el);
+    const st = css(el);
+    let h = false;
+    if ((st.clip !== "auto" && st.position === "absolute") || /inset\(50%\)|inset\(100%\)/.test(st.clipPath)) {
+      const r = el.getBoundingClientRect(); h = r.width <= 2 || r.height <= 2;
+    } else if (st.overflow === "hidden" && st.position === "absolute") {
+      const r = el.getBoundingClientRect(); h = r.width <= 1 || r.height <= 1;
+    }
+    if (!h) h = srOnly(el.parentElement);
+    srCache.set(el, h);
+    return h;
+  };
+  const hiddenText = (el) => {
+    if (!el || el.nodeType !== 1 || el === document.body) return false;
+    if (hidCache.has(el)) return hidCache.get(el);
+    let box = el;
+    while (box && box !== document.body && css(box).display === "contents") box = box.parentElement;
+    const h = !!(box && box !== document.body && box.checkVisibility && !box.checkVisibility({ opacityProperty: true, visibilityProperty: true })) || srOnly(el);
+    hidCache.set(el, h);
+    return h;
+  };
+
   J.snapshot = ({ start = 1, maxEls = 4000 } = {}) => {
+    hidCache = new Map(); srCache = new Map();
     if (J.next < start) J.next = start;
     const { all, xframes } = collect();
     const out = [], seen = new Set(), now = new Set(), W = innerWidth, H = innerHeight;
@@ -206,6 +238,7 @@ export const INSTALL = function (VERSION) {
         if (!n.textContent.trim() || !n.parentElement || ["SCRIPT", "STYLE", "NOSCRIPT"].includes(n.parentElement.tagName)) continue;
         range.selectNodeContents(n); const r = range.getBoundingClientRect();
         if (r.bottom < 0 || r.top > H || r.width === 0) continue;
+        if (hiddenText(n.parentElement)) continue;
         text += " " + n.textContent;
       }
       text = clean(text, 2500);
@@ -243,7 +276,7 @@ export const INSTALL = function (VERSION) {
     const captcha = [...document.querySelectorAll("iframe[src]")].some((f) => /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|arkoselabs|funcaptcha/i.test(f.src))
       || /verify you are (a )?human|are you a robot|press (and|&) hold|unusual traffic from your computer|checking your browser/i.test(full.slice(0, 5000));
     return {
-      url: location.href, title: document.title, text,
+      url: location.href, title: document.title, text, at: { origin: performance.timeOrigin, t: performance.now() },
       metrics: { scroll_y: Math.round(scrollY), page_height: document.documentElement.scrollHeight, viewport_h: H, text_length: full.length, elements: out.length, cross_origin_frames: xframes || undefined },
       dialogs, captcha, tables: tables.length ? tables : undefined, elements: out, next: J.next,
     };
@@ -360,6 +393,18 @@ export const INSTALL = function (VERSION) {
   J.scrollSum = () => { let s = scrollY; for (const el of document.querySelectorAll("body *")) if (el.scrollTop) s += el.scrollTop; return s; };
   J.readText = (max = 12000) => clean(document.body?.innerText ?? "", max);
   J.mutated = () => performance.now() - (window.__jevbMut ?? 0);
+  // Resolve on the first DOM change after `since` (a snapshot's `at`), or after `cap` ms.
+  // A different document (navigation) counts as a change. Event-driven: a MutationObserver,
+  // not polling, so a page that waits on a JS timer is picked up the moment it renders.
+  J.waitChange = (since, cap = 8000) => new Promise((res) => {
+    const t0 = performance.now();
+    const fin = (changed) => { mo.disconnect(); clearTimeout(timer); res({ changed, waited: Math.round(performance.now() - t0) }); };
+    const mo = new MutationObserver(() => fin(true));
+    let timer;
+    if (since && (since.origin !== performance.timeOrigin || (window.__jevbMut ?? 0) > since.t)) return res({ changed: true, waited: 0 });
+    mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    timer = setTimeout(() => fin(false), cap);
+  });
   return (window.__jevb = J);
 };
 

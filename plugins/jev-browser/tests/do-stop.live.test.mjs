@@ -35,3 +35,20 @@ test("ti-sort-table: done after one header click, not toggled back", live, () =>
     assert.equal(evalJs(s, "() => document.querySelector('#table1 tbody tr td').innerText"), "Bach");
   } finally { run(s, "close"); }
 });
+
+// `wait` blocks until the page changes (not a fixed sleep counted in rounds): the result appears
+// on a 5 s JS timer with no network or DOM activity before it, and must be seen as soon as it renders.
+test("ti-dynamic-loading: done or likely_done in under 8 s, 5 of 5 runs", live, () => {
+  const s = "test-dynamic-loading";
+  try {
+    for (let k = 0; k < 5; k++) {
+      run(s, "open", "https://the-internet.herokuapp.com/dynamic_loading/2");
+      const t0 = Date.now();
+      const d = doJson(s, "Start the loading and wait until the result text appears");
+      const ms = Date.now() - t0;
+      assert.ok(["done", "likely_done"].includes(d.status), `run ${k + 1}: status ${d.status}`);
+      assert.ok(ms < 8000, `run ${k + 1}: ${ms} ms`);
+      assert.equal(evalJs(s, "() => document.querySelector('#finish h4')?.innerText"), "Hello World!");
+    }
+  } finally { run(s, "close"); }
+});

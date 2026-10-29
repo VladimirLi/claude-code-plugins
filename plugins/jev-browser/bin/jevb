@@ -14,7 +14,7 @@ const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SE
   act <op> [id] [value]                        one action: click|dblclick|right_click|hover|check|uncheck|type|clear|
                                                select|press_enter|press_key|upload|drag|scroll|wait|back|navigate
         e.g. act click 12 · act type 7 "hello" · act select 5 "Option 2" · act press_key Escape
-             act drag 3 9 · act scroll down · act navigate https://example.com
+             act drag 3 9 · act scroll down · act wait (until the page changes) · act navigate https://example.com
   act '<JSON list>' [--values JSON] [--allow-irreversible]
         e.g. act '[{"op":"type","id":7,"value_key":"user"},{"op":"click","id":9}]' --values '{"user":"ada"}'
   observe [full|diff|find <text>|read|screenshot]

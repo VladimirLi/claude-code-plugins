@@ -7,6 +7,10 @@ import { fence, scrub, secretsOf, redactValues, irreversibleRule, dialogRisky, d
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_SINGLE = 240, GROUP = 30, MAX_STATE_CHARS = 70_000;
+// `wait` rounds are bounded by time, not by count: each one blocks until the page changes
+// (or WAIT_STEP ms pass), and all of them together stop after WAIT_BUDGET ms. They do not use
+// up max_actions.
+const WAIT_STEP = 8000, WAIT_BUDGET = 18_000, MAX_WAITS = 30;
 const COMPLETE_Q = { type: "noul", instructions: "Is everything `task.goal` asks for already finished on `page`, so that no further action (such as pressing a submit, search or continue button) is needed?" };
 const ACTION_DONE_Q = { type: "noul", instructions: "Has an action in `task.history` already performed what `task.goal` asks for (for example the drag, scroll, click or entry it names), and does `task.last_change` show the page changed the way that action should change it?" };
 const UNSURE = "the page looks done but Jev is unsure; verify with check or observe";
@@ -260,7 +264,7 @@ export class Agent {
     max_actions = Math.min(Math.max(1, max_actions | 0 || 10), 30);
     this.remember(values);
     const history = [], rounds = [];
-    let prev = null, page = null, waits = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange;
+    let prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange;
     const seen = new Map();
     tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
     for (let round = 0; round <= max_actions; round++) {
@@ -292,9 +296,16 @@ export class Agent {
         }
         return conf;
       };
+      // a goal that ends in entering values ("enable the field, then type into it"): the page
+      // alone rarely proves the entry was the goal, so the unsure band becomes done when Jev wants
+      // no further action, rates done high, and code saw every value entered without error
+      const lastAct = history.filter((h) => h.action && h.action !== "wait").at(-1);
+      const enteredAll = Object.keys(values).length > 0 && lastAct && !lastAct.error && ["type", "select", "upload"].includes(lastAct.action)
+        && Object.keys(values).every((k) => history.some((h) => h.value === k && !h.error));
+      const settled = act.tool === "none" && done >= 0.7 && enteredAll;
       if (done >= (round > 0 ? 0.5 : 0.9)) {
         const c = await confirm();
-        if (c >= 0.65) { status = "done"; break; }
+        if (c >= 0.65 || (c >= 0.45 && settled)) { status = "done"; if (c < 0.65) info = "every given value was entered and Jev sees nothing left to do"; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
       }
       if (round === max_actions) break;
@@ -313,8 +324,11 @@ export class Agent {
       }
       if (n("blocked") >= 0.85) { status = "blocked"; break; }
       if (act.tool === "wait") {
-        if (++waits > 8) { status = "stuck"; info = "the page never finished loading"; break; }
-        await sleep(400); await tab.settle({ cap: 2000 }); history.push({ action: "wait" }); continue;
+        if (++waits > MAX_WAITS || waitedMs >= WAIT_BUDGET) { status = "stuck"; info = `the page did not finish loading within ${Math.round(waitedMs / 1000)} s of waiting`; break; }
+        const w = await tab.waitChange(page, Math.min(WAIT_STEP, WAIT_BUDGET - waitedMs));
+        waitedMs += w.ms; r.waited = w.ms;
+        history.push({ action: "wait", ...(w.changed ? {} : { note: `no change in ${Math.round(w.ms / 100) / 10} s` }) });
+        round--; continue;   // waiting is not an action
       }
       if (TARGETED.has(act.tool) && (act.target == null || act.p_target < 0.3)) { status = "ambiguous"; info = "target confidence too low; act on a candidate directly, or make the goal more specific"; break; }
       const key = `${act.tool}|${act.target}|${act.valueKey ?? ""}|${page.url}|${page.text}|${page.elements.length}`;
@@ -398,6 +412,13 @@ export class Agent {
     // stuck, max_actions or ambiguous after acting: the goal may be met anyway (repeat
     // detectors fire on finished toggles and scrolls); ask before handing back as a failure
     if (["stuck", "max_actions", "ambiguous"].includes(status) && history.some((h) => h.action) && page) {
+      // judge the page as it is now: after a wait (or a decision that took a while) the
+      // round's snapshot can be older than what finally rendered
+      const fresh = await tab.snapshot().catch(() => null);
+      if (fresh) {
+        if (fresh.text !== page.text || fresh.elements.length !== page.elements.length || fresh.url !== page.url) { lastChange = diffForJev(pageDiff(prev ?? page, fresh)); conf = null; if (rounds.length) rounds.at(-1).action_done = undefined; }
+        page = fresh;
+      }
       const r0 = rounds.at(-1);
       // in parallel: the page-only confirm, and whether the action the goal names (drag, scroll…)
       // was done. Goals that name an action cannot be confirmed from the page alone, but the
@@ -420,7 +441,7 @@ export class Agent {
     if (info) lines.push(`info: ${info}`);
     if (pending) lines.push(`pending: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""} ${pending.element}${pending.dialog ? ` dialog "${pending.dialog}"` : ""} (gate: ${gate ?? "dialog"})`);
     lines.push(`actions (${history.filter((h) => h.action).length}, ${stats.calls - calls0} Jev calls, ${Date.now() - t0} ms):`);
-    for (const h of history) lines.push(h.event ? `  ~ ${h.event}` : `  - ${h.action} ${h.element}${h.value ? ` <- values.${h.value}` : ""}${h.option ? ` = "${h.option}"` : ""}${h.key ? ` key=${h.key}` : ""}${h.destination ? ` -> ${h.destination}` : ""}${h.note ? ` (${h.note})` : ""}${h.error ? ` ERROR ${h.error}` : ""}`);
+    for (const h of history) lines.push(h.event ? `  ~ ${h.event}` : `  - ${h.action}${h.element ? ` ${h.element}` : ""}${h.value ? ` <- values.${h.value}` : ""}${h.option ? ` = "${h.option}"` : ""}${h.key ? ` key=${h.key}` : ""}${h.destination ? ` -> ${h.destination}` : ""}${h.note ? ` (${h.note})` : ""}${h.error ? ` ERROR ${h.error}` : ""}`);
     if (["ambiguous", "stuck", "max_actions"].includes(status) && rounds.at(-1)?.candidates) lines.push(`candidates: ${rounds.at(-1).candidates.map((c) => `[${c.id}] ${c.el} p=${c.p}`).join("; ")}`);
     // done: a short view of the result; otherwise the full page so Claude can take over at once
     const view = ["done", "likely_done"].includes(status)
