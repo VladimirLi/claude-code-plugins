@@ -1,7 +1,6 @@
 {
   "name": "brain-dump",
-  "version": "0.4.0",
-  "description": "Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them, with sections that fit the intent (bug, feature, change, question, review, workflow)",
+  "description": "Turns long voice-dictated prompts into a clear, structured prompt before Claude sees them, with sections that fit the intent (bug, feature, change, question, review, workflow), or into a Gauntlet Loop prompt",
   "author": {
     "name": "VladimirLi",
     "url": "https://github.com/VladimirLi"
@@ -39,6 +38,12 @@
       "title": "Force prefix",
       "description": "A prompt starting or ending with this word is always rewritten, whatever its length or the mode. The word is removed. Saying \"this is a brain dump\" at the start of a sentence does the same. Empty: none.",
       "default": "bd"
+    },
+    "gauntletPrefix": {
+      "type": "string",
+      "title": "Gauntlet loop prefix",
+      "description": "A prompt starting or ending with this word becomes a Gauntlet Loop prompt: a builder and a harsh critic loop until the work beats a named reference. Saying \"make a gauntlet loop\" does the same. The word is removed. Empty: only the phrase.",
+      "default": "gl"
     },
     "skipPrefix": {
       "type": "string",

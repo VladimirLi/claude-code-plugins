@@ -3,11 +3,12 @@ export type Trigger = {
   minWords: number
   forcePrefix: string
   skipPrefix: string
+  gauntletPrefix: string
 }
 
 export type Decision =
   | { rewrite: false; text: string }
-  | { rewrite: true; text: string; by: 'prefix' | 'phrase' | 'length'; words: number }
+  | { rewrite: true; text: string; by: 'prefix' | 'phrase' | 'length'; words: number; intent?: 'gauntlet' }
 
 export type Question = { question: string; header: string; options: string[] }
 export type Answer = { question: string; answer: string; header?: string }
@@ -39,6 +40,14 @@ const SECTION_TEXT: Record<string, string> = {
   'After that': 'what to do once the answer is in, only if the user said so.',
   'Done when': 'bullets for how the result will be checked.',
   'Agent decides': 'bullets for decisions the user left to the agent.',
+  Goal: 'the opening instruction, one or two sentences that start with a verb ("Build a landing page for...", "Write a 2000-word explainer on..."), with every concrete detail the user gave about the result.',
+  Bar: 'the one named, fetchable thing the result must beat, as a short noun phrase with its URL, product, repo, author or title ("Nike\'s current running campaign page"). Never a category.',
+  'Getting the bar': 'one sentence on how to get the real bar, only if the user said or it is clear from the bar ("Screenshot it at desktop and mobile.", "Pull three of her actual posts.").',
+  'Judged on': 'what the critic decides between ours and the bar, as a clause that starts with "which" ("which one a non-engineer would understand faster").',
+  Pieces: 'the pieces the user named to split the work into, as a comma-separated list. Only pieces the user named.',
+  'Measurable half': 'one sentence naming a number the result must also beat (load time, benchmark, pass rate), only if the user named one.',
+  Budget: 'the budget or cost ceiling as a short noun phrase ("$30 of API spend"), only if the user named one.',
+  'Tools needed': 'the tools the goal needs as a comma-separated list ("image generation, a browser"), only if the user named them.',
   Unresolved: 'bullets, only for what you could not settle.',
 }
 export const SECTIONS = Object.keys(SECTION_TEXT)
@@ -89,11 +98,22 @@ export const INTENTS: Record<string, Template> = {
     required: ['Task', 'Steps'],
     ask: 'Ask where the agent should stop and wait for the user when the brain dump does not say.',
   },
+  // Only a gauntlet trigger picks it: its prompt is the Gauntlet Loop template, filled by fillGauntlet.
+  gauntlet: {
+    label: 'gauntlet loop',
+    when: 'a prompt that makes an agent loop a builder and a harsh critic until the work beats a named reference',
+    sections: ['Goal', 'Bar', 'Getting the bar', 'Judged on', 'Pieces', 'Measurable half', 'Budget', 'Tools needed'],
+    required: ['Goal', 'Bar', 'Judged on'],
+    ask: `The bar must be named (a specific thing, not a category), fetchable (the critic can screenshot, read, run or open it) and comparable (the two can sit side by side and a judge can pick one). When the brain dump and the conversation name no bar that passes all three, or name a vague one ("award-winning sites"), ask for it with header "Bar" and offer 2 or 3 candidate bars that pass, one short line each with its URL when it has one, hardest reachable first. Each candidate is itself a real, named thing; never a placeholder, a category or "name one". When nothing published fits, a named, fetchable spec, test suite or benchmark counts. Ask for "Judged on" when the goal does not make it clear, offering the likely answer. Ask about a measurable half (load time, benchmark, word count, pass rate) when the goal has one and the user named none. Never ask about pieces, architecture, stack, round counts, budget or tools.`,
+  },
 }
+
+// A dump that does not trigger a gauntlet loop is never read as one.
+const AUTO_INTENTS = Object.keys(INTENTS).filter(k => k !== 'gauntlet')
 
 // The fallback for a brain dump no intent fits, with the person's own required sections.
 export function templateFor(intent: string, generalRequired: readonly string[]): Template {
-  if (Object.keys(INTENTS).includes(intent)) return INTENTS[intent]!
+  if (Object.hasOwn(INTENTS, intent)) return INTENTS[intent]!
   return { label: 'general request', when: 'none of the above fits', sections: ['Task', 'Why', 'Scope', 'Requirements and guardrails', 'Done when'], required: [...generalRequired], ask: '' }
 }
 
@@ -127,9 +147,15 @@ const PHRASE =
 export const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length
 const hasWords = (text: string) => /[\p{L}\p{N}]/u.test(text)
 
+// "Make a gauntlet loop" asks for one; "the gauntlet loop skill" only mentions it.
+const GAUNTLET_PHRASE = /\b(?:make|create|build|write|set\s+up)\s+(?:me\s+|us\s+)?(?:a|an|another)\s+gauntlet[\s-]?loop\b/i
+
 export function decide(text: string, t: Trigger): Decision {
   const skipped = stripPrefix(text, t.skipPrefix)
   if (skipped !== undefined) return { rewrite: false, text: skipped }
+  const gauntlet = stripPrefix(text, t.gauntletPrefix) ?? stripSuffix(text, t.gauntletPrefix)
+  if (gauntlet !== undefined) return hasWords(gauntlet) ? { rewrite: true, text: gauntlet, by: 'prefix', words: countWords(gauntlet), intent: 'gauntlet' } : { rewrite: false, text }
+  if (GAUNTLET_PHRASE.test(text)) return { rewrite: true, text, by: 'phrase', words: countWords(text), intent: 'gauntlet' }
   const forced = stripPrefix(text, t.forcePrefix) ?? stripSuffix(text, t.forcePrefix)
   // A forced prompt with nothing in it but the trigger has nothing to rewrite.
   if (forced !== undefined) return hasWords(forced) ? { rewrite: true, text: forced, by: 'prefix', words: countWords(forced) } : { rewrite: false, text }
@@ -158,7 +184,7 @@ export function parseAnalysis(reply: string, max: number): Analysis {
   } catch {
     return { intent: 'general', resolved: [], questions: [] }
   }
-  const intent = typeof parsed.intent === 'string' && Object.keys(INTENTS).includes(parsed.intent) ? parsed.intent : 'general'
+  const intent = typeof parsed.intent === 'string' && Object.hasOwn(INTENTS, parsed.intent) ? parsed.intent : 'general'
   const resolved = Array.isArray(parsed.resolved) ? parsed.resolved.filter((r): r is string => typeof r === 'string' && r !== '') : []
   const list = Array.isArray(parsed.questions) ? parsed.questions : []
   const questions = list
@@ -169,8 +195,11 @@ export function parseAnalysis(reply: string, max: number): Analysis {
 }
 
 // The model's suggested answers (at most two), then the two ways out; typing an answer is the dialog's "Other".
+// A gauntlet bar with candidates offers only them (and Other): a bar left to a guess is how the loop fails.
 export function toQuestion(question: string, header: string, suggested: readonly unknown[]): Question {
-  const own = suggested.filter((o): o is string => typeof o === 'string' && o !== '' && o !== AGENT_DECIDES && o !== LEAVE_OUT).slice(0, 2)
+  const valid = suggested.filter((o): o is string => typeof o === 'string' && o !== '' && o !== AGENT_DECIDES && o !== LEAVE_OUT)
+  if (header === 'Bar' && valid.length >= 2) return { question, header, options: valid.slice(0, 3) }
+  const own = valid.slice(0, 2)
   return { question, header: header.slice(0, 12), options: [...own, AGENT_DECIDES, ...(own.length < 2 ? [LEAVE_OUT] : [])] }
 }
 
@@ -203,11 +232,12 @@ function isCovered(section: string, sections: Map<string, string>, answers: read
 }
 
 // What the finished rewrite still lacks: each becomes a question to the person, never a guess.
-export function gapsIn(rewrite: string, required: readonly string[], answers: readonly Answer[] = []): Question[] {
+// "suggested" holds answers offered for a section before, such as the candidate bars, so asking again offers them again.
+export function gapsIn(rewrite: string, required: readonly string[], answers: readonly Answer[] = [], suggested: Readonly<Record<string, readonly string[]>> = {}): Question[] {
   const sections = parseSections(rewrite)
   const missing = required
     .filter(r => !isCovered(r, sections, answers))
-    .map(r => toQuestion(`The prompt has nothing under "${r}". What should it say? (type it under Other)`, r, []))
+    .map(r => toQuestion(`The prompt has nothing under "${r}". What should it say? (type it under Other)`, r, suggested[r] ?? []))
   const unresolved = bullets(sections.get('Unresolved') ?? '').map(u => toQuestion(u.endsWith('?') ? u : `${u}?`, 'Unresolved', []))
   return [...missing, ...unresolved]
 }
@@ -217,8 +247,10 @@ const answerLines = (answers: readonly Answer[]) =>
 
 const describe = (names: readonly string[]) => names.map(n => `${n}: ${SECTION_TEXT[n] ?? ''}`).join('\n')
 
-export function analysisPrompt(dump: string, answers: readonly Answer[], generalRequired: readonly string[], max: number, withConversation: boolean): string {
-  const templates = [...Object.keys(INTENTS), 'general'].map(k => [k, templateFor(k, generalRequired)] as const)
+// A forced intent (a gauntlet trigger) is the only one offered, so the analysis cannot read it as something else.
+export function analysisPrompt(dump: string, answers: readonly Answer[], generalRequired: readonly string[], max: number, withConversation: boolean, forced?: string): string {
+  const keys = forced === undefined ? [...AUTO_INTENTS, 'general'] : [forced]
+  const templates = keys.map(k => [k, templateFor(k, generalRequired)] as const)
   const intents = templates.map(([k, t]) => `- ${k}: ${t.when}. Required sections: ${t.required.join(', ') || 'none'}.${t.ask ? ` ${t.ask}` : ''}`).join('\n')
   const required = [...new Set(templates.flatMap(([, t]) => t.required))]
   return `You prepare a voice-dictated brain dump to become a prompt for a coding agent (Claude Code). Do not answer the brain dump itself.
@@ -236,7 +268,7 @@ Ignore transcription noise you can resolve from context. Never ask what the brai
 ${withConversation ? `Under "resolved", list each reference you resolved from the conversation, as a short fact ("'that file' = apps/web/src/x.ts"). Leave it empty when the conversation resolved nothing.` : 'Leave "resolved" empty.'}
 When a question is about a missing required section, its header is that section's name.
 Reply with JSON only:
-{"intent":"${Object.keys(INTENTS).join('|')}|general","resolved":["..."],"questions":[{"question":"...?","header":"<=12 chars","options":["up to 2 likely answers, or none for an open question"]}]}
+{"intent":"${keys.join('|')}","resolved":["..."],"questions":[{"question":"...?","header":"<=12 chars","options":["up to 2 likely answers, or none for an open question"]}]}
 
 Brain dump:
 """
@@ -270,4 +302,46 @@ export function rewritePrompt(dump: string, answers: readonly Answer[], resolved
   const qa = answers.length === 0 ? '' : `\n\nThe user's answers to clarifying questions:\n${answerLines(answers)}`
   const refs = resolved.length === 0 ? '' : `\n\nResolved references:\n${resolved.map(r => `- ${r}`).join('\n')}`
   return `Brain dump:\n"""\n${dump}\n"""${qa}${refs}`
+}
+
+const LEFT = /^(?:left to the agent|none)\.?$/i
+
+// A section's text as one line; a section left to the agent or left out counts as empty.
+function line(sections: Map<string, string>, name: string): string {
+  const text = bullets(sections.get(name) ?? '').join(', ')
+  return LEFT.test(text) ? '' : text
+}
+
+const sentence = (s: string) => (s === '' || /[.!?]$/.test(s) ? s : `${s}.`)
+const clause = (s: string) => s.replace(/[.!?]+$/, '')
+
+// The Gauntlet Loop template (github.com/robonuggets/gauntlet-loop), filled from the rewrite's sections.
+// The fixed lines are written here, never by the model, so none can be dropped or softened.
+export function fillGauntlet(rewrite: string): string {
+  const s = parseSections(rewrite)
+  const bar = clause(line(s, 'Bar'))
+  const pieces = line(s, 'Pieces')
+  const judged = clause(line(s, 'Judged on')) || 'which one is better'
+  const tools = clause(line(s, 'Tools needed'))
+  const budget = clause(line(s, 'Budget'))
+  const extras = [tools && `Use ${tools}.`, budget && `Stay within a budget of ${budget}.`].filter(Boolean).join(' ')
+  const unresolved = bullets(s.get('Unresolved') ?? '')
+  return [
+    sentence(line(s, 'Goal')),
+    [
+      bar ? `The bar is ${bar.replace(/^(?:A|An|The)\b/, w => w.toLowerCase())}.` : 'Before you build, pick the hardest named reference you can actually get, a specific page, piece, repo or title, and make it the bar.',
+      sentence(line(s, 'Measurable half')),
+      line(s, 'Getting the bar') ? `${sentence(line(s, 'Getting the bar'))} Compare against it directly, not against a description of it.` : 'Get the real thing first and compare against it directly, not against a description of it.',
+    ].filter(Boolean).join(' '),
+    `Break this into the smallest pieces that can be improved and judged on their own${pieces ? ` - ${clause(pieces)}` : ''}. For each piece, fan out a builder and a separate critic with fresh context. The critic inspects the actual output, puts it next to the bar blind with the labels stripped, says ${judged}, and names the single biggest remaining gap. Then it goes back to the builder.`,
+    extras,
+    'The critic should be a harsh critic. Praise is not useful. If ours does not win, it keeps going.',
+    '/loop on each piece until the critic picks ours blind. Do not stop before that.',
+    'Keep a live progress page updating as the work evolves so I can watch it.',
+    'Fan out subagents and ultracode.',
+    // Left in for the person to settle while reviewing; gapsIn reads them from the rewrite, not from here.
+    unresolved.length > 0 ? `Unresolved:\n${unresolved.map(u => `- ${u}`).join('\n')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }

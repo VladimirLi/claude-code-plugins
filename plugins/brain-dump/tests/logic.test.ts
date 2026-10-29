@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
-import { AGENT_DECIDES, INTENTS, LEAVE_OUT, decide, gapsIn, parseAnalysis, parseSections, rewriteSystem, templateFor } from '../hooks/logic'
+import { AGENT_DECIDES, INTENTS, LEAVE_OUT, analysisPrompt, decide, fillGauntlet, gapsIn, parseAnalysis, parseSections, rewriteSystem, templateFor } from '../hooks/logic'
 
-const T = { mode: 'confirm', minWords: 5, forcePrefix: 'bd', skipPrefix: 'raw' }
+const T = { mode: 'confirm', minWords: 5, forcePrefix: 'bd', skipPrefix: 'raw', gauntletPrefix: 'gl' }
 const REQUIRED = ['Task', 'Done when', 'Scope']
 
 test('length, prefixes and mode decide when a prompt is rewritten', async () => {
@@ -116,4 +116,79 @@ test('every intent writes only sections the parser knows, and its rewrite asks f
     }
   }
   expect(rewriteSystem(templateFor('question', REQUIRED))).not.toContain('Done when:')
+})
+
+test('"gl" first or last, or asking to make a gauntlet loop, reads the prompt as a gauntlet loop', async () => {
+  const t = { ...T, mode: 'off', minWords: 100 }
+  expect(decide('gl a pricing page for my SaaS', t)).toEqual({ rewrite: true, text: 'a pricing page for my SaaS', by: 'prefix', words: 6, intent: 'gauntlet' })
+  expect(decide('a pricing page for my SaaS. G. L.', t)).toEqual({ rewrite: true, text: 'a pricing page for my SaaS.', by: 'prefix', words: 6, intent: 'gauntlet' })
+  for (const text of ['Make a gauntlet loop for a pricing page', 'okay so can you make me a gauntlet loop: an explainer', 'Create a gauntlet-loop for a CLI', 'I want you to set up a gauntlet loop for this essay'])
+    expect([text, decide(text, t)]).toEqual([text, { rewrite: true, text, by: 'phrase', words: expect.any(Number), intent: 'gauntlet' }])
+  for (const text of ['the gauntlet loop skill is neat', 'how does a gauntlet loop work', 'glad it works', 'gl'])
+    expect([text, decide(text, t).rewrite]).toEqual([text, false])
+  expect(decide('raw make a gauntlet loop', t)).toEqual({ rewrite: false, text: 'make a gauntlet loop' })
+})
+
+test('a missing bar offers its candidate bars and no way out; without candidates it falls back', async () => {
+  const reply = '{"intent":"gauntlet","questions":[{"question":"Which bar?","header":"Bar","options":["Stripe pricing page","Linear pricing page","Vercel pricing page","Notion"]}]}'
+  expect(parseAnalysis(reply, 3).questions[0]!.options).toEqual(['Stripe pricing page', 'Linear pricing page', 'Vercel pricing page'])
+  expect(parseAnalysis(reply.replace(',"Linear pricing page","Vercel pricing page","Notion"', ''), 3).questions[0]!.options).toEqual(['Stripe pricing page', AGENT_DECIDES, LEAVE_OUT])
+
+  const required = templateFor('gauntlet', REQUIRED).required
+  expect(required).toEqual(['Goal', 'Bar', 'Judged on'])
+  const gaps = gapsIn('Goal: Build a pricing page.\n\nJudged on: which one converts', required, [], { Bar: ['Stripe pricing page', 'Linear pricing page'] })
+  expect(gaps).toEqual([{ question: expect.stringContaining('"Bar"'), header: 'Bar', options: ['Stripe pricing page', 'Linear pricing page'] }])
+})
+
+test('only a gauntlet trigger offers the gauntlet intent to the analysis', async () => {
+  expect(analysisPrompt('x', [], REQUIRED, 3, true)).not.toContain('- gauntlet:')
+  const forced = analysisPrompt('x', [], REQUIRED, 3, true, 'gauntlet')
+  expect(forced).toContain('- gauntlet:')
+  expect(forced).not.toContain('- bug:')
+  expect(forced).toContain('{"intent":"gauntlet"')
+  expect(forced).toContain('fetchable')
+})
+
+const FIXED = [
+  'The critic should be a harsh critic. Praise is not useful. If ours does not win, it keeps going.',
+  '/loop on each piece until the critic picks ours blind. Do not stop before that.',
+  'Keep a live progress page updating as the work evolves so I can watch it.',
+  'Fan out subagents and ultracode.',
+]
+
+test('the gauntlet prompt fills every slot of the template and always keeps its fixed lines', async () => {
+  const full = fillGauntlet(
+    [
+      'Goal: Build a landing page for a running brand. Green and dark, it has to feel alive.',
+      "Bar: Nike's current running campaign page.",
+      'Getting the bar: Screenshot it at desktop and mobile',
+      'Judged on: which one is more alive.',
+      'Pieces:\n- hero\n- motion\n- mobile',
+      'Measurable half: It also has to load in under 2 seconds.',
+      'Budget: $20 of API spend.',
+      'Tools needed: a browser for screenshots',
+    ].join('\n\n'),
+  )
+  expect(full).toBe(
+    [
+      'Build a landing page for a running brand. Green and dark, it has to feel alive.',
+      "The bar is Nike's current running campaign page. It also has to load in under 2 seconds. Screenshot it at desktop and mobile. Compare against it directly, not against a description of it.",
+      'Break this into the smallest pieces that can be improved and judged on their own - hero, motion, mobile. For each piece, fan out a builder and a separate critic with fresh context. The critic inspects the actual output, puts it next to the bar blind with the labels stripped, says which one is more alive, and names the single biggest remaining gap. Then it goes back to the builder.',
+      'Use a browser for screenshots. Stay within a budget of $20 of API spend.',
+      ...FIXED,
+    ].join('\n\n'),
+  )
+
+  // No budget, tools or pieces unless given; a delegated section is left out, not written as "Left to the agent".
+  const minimal = fillGauntlet('Goal: Write an explainer.\n\nBar: three Julia Evans posts\n\nJudged on: Left to the agent.\n\nPieces: Left to the agent.')
+  expect(fillGauntlet('Bar: The Stripe pricing page')).toContain('The bar is the Stripe pricing page.')
+  expect(minimal).toContain('The bar is three Julia Evans posts. Get the real thing first and compare against it directly')
+  expect(minimal).toContain('judged on their own. For each piece')
+  expect(minimal).toContain('says which one is better,')
+  expect(minimal).not.toMatch(/budget|Left to the agent/i)
+  for (const l of FIXED) expect(minimal).toContain(l)
+  expect(minimal.endsWith('Fan out subagents and ultracode.')).toBe(true)
+
+  // What is still open stays visible for the person to settle in the prompt box.
+  expect(fillGauntlet('Goal: Build it.\n\nUnresolved:\n- Which bar?')).toContain('Unresolved:\n- Which bar?')
 })

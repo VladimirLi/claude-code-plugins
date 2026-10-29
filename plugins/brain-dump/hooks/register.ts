@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Analysis, Answer, Question } from './logic'
-import { AGENT_DECIDES, analysisPrompt, decide, gapsIn, parseAnalysis, parseList, rewritePrompt, rewriteSystem, templateFor } from './logic'
+import { AGENT_DECIDES, analysisPrompt, decide, fillGauntlet, gapsIn, parseAnalysis, parseList, rewritePrompt, rewriteSystem, templateFor } from './logic'
 
 const HELP = `/braindump                      show the settings
 /braindump confirm|auto|off|on  set the mode (on = confirm)
@@ -50,14 +50,18 @@ async function askAll($: EngineInterface, questions: readonly Question[], answer
 }
 
 // A fork reads the conversation from the prompt cache, so it can resolve references; with nothing to fork, the brain dump alone.
-async function analyze($: EngineInterface, dump: string, answers: readonly Answer[], cfg: Cfg): Promise<Analysis> {
-  if (cfg.useConversation) {
-    const f = await $.model.fork({ prompt: analysisPrompt(dump, answers, cfg.required, cfg.maxQuestions, true) })
-    if (f.isAnswered) return parseAnalysis(f.text, cfg.maxQuestions)
+async function analyze($: EngineInterface, dump: string, answers: readonly Answer[], cfg: Cfg, forced?: string): Promise<Analysis> {
+  const parse = (text: string) => {
+    const a = parseAnalysis(text, cfg.maxQuestions)
+    return forced === undefined ? a : { ...a, intent: forced }
   }
-  const r = await $.model.complete({ model: cfg.model, prompt: analysisPrompt(dump, answers, cfg.required, cfg.maxQuestions, false), maxTokens: 2000, timeoutMs: 60000 })
+  if (cfg.useConversation) {
+    const f = await $.model.fork({ prompt: analysisPrompt(dump, answers, cfg.required, cfg.maxQuestions, true, forced) })
+    if (f.isAnswered) return parse(f.text)
+  }
+  const r = await $.model.complete({ model: cfg.model, prompt: analysisPrompt(dump, answers, cfg.required, cfg.maxQuestions, false, forced), maxTokens: 2000, timeoutMs: 60000 })
   // Without the conversation there is nothing a reference could be resolved from.
-  return r.isAnswered ? { ...parseAnalysis(r.text, cfg.maxQuestions), resolved: [] } : { intent: 'general', resolved: [], questions: [] }
+  return r.isAnswered ? { ...parse(r.text), resolved: [] } : { intent: forced ?? 'general', resolved: [], questions: [] }
 }
 
 export const register: Register = (on, options) => {
@@ -65,6 +69,7 @@ export const register: Register = (on, options) => {
   const minWords = Number(options.minWords ?? 120)
   const forcePrefix = String(options.forcePrefix ?? 'bd')
   const skipPrefix = String(options.skipPrefix ?? 'raw')
+  const gauntletPrefix = String(options.gauntletPrefix ?? 'gl')
   const askQuestions = options.askQuestions !== false
   const maxRounds = Math.max(1, Number(options.maxRounds ?? 2))
   const review = options.review !== false
@@ -100,7 +105,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const d = decide(e.text, { mode, minWords, forcePrefix, skipPrefix })
+    const d = decide(e.text, { mode, minWords, forcePrefix, skipPrefix, gauntletPrefix })
     if (!d.rewrite) return d.text === e.text ? next(e) : next({ ...e, text: d.text })
 
     if (d.by === 'length' && mode === 'confirm') {
@@ -116,11 +121,13 @@ export const register: Register = (on, options) => {
       const answers: Answer[] = []
       // The analysis also picks the intent, so it runs even when no questions are asked.
       // Says what set it off, so an unexpected rewrite is easy to explain and avoid next time.
-      const why = d.by === 'phrase' ? 'you said it is a brain dump' : d.by === 'prefix' ? `"${forcePrefix}"` : `${d.words} words`
+      const why = d.intent === 'gauntlet' ? (d.by === 'phrase' ? 'you asked for a gauntlet loop' : `"${gauntletPrefix}"`) : d.by === 'phrase' ? 'you said it is a brain dump' : d.by === 'prefix' ? `"${forcePrefix}"` : `${d.words} words`
       $.ui.status(`brain-dump: reading the brain dump (${why})…`)
-      const a = await analyze($, d.text, answers, cfg)
+      const a = await analyze($, d.text, answers, cfg, d.intent)
       const template = templateFor(a.intent, cfg.required)
       const resolved = a.resolved
+      // The options first offered for a section (the candidate bars) are offered again if it is still empty after the rewrite.
+      const suggested = Object.fromEntries(a.questions.map(q => [q.header, q.options]))
       let isAsking = askQuestions && (await askAll($, a.questions, answers))
 
       let rewritten = ''
@@ -133,15 +140,16 @@ export const register: Register = (on, options) => {
         }
         rewritten = r.text.trim()
         // The finished rewrite is checked: a required section it lacks, or a point it could not settle, goes back to the person.
-        const gaps = gapsIn(rewritten, template.required, answers).slice(0, cfg.maxQuestions)
+        const gaps = gapsIn(rewritten, template.required, answers, suggested).slice(0, cfg.maxQuestions)
         if (gaps.length === 0 || !isAsking || round >= maxRounds) break
         const before = answers.length
         isAsking = await askAll($, gaps, answers)
         if (answers.length === before) break
       }
 
-      if (keepHistory) void logHistory($, { action: `rewrite:${d.by}`, original: d.text, intent: a.intent, answers, rewrite: rewritten })
       const left = gapsIn(rewritten, template.required, answers).length
+      if (a.intent === 'gauntlet') rewritten = fillGauntlet(rewritten)
+      if (keepHistory) void logHistory($, { action: `rewrite:${d.by}`, original: d.text, intent: a.intent, answers, rewrite: rewritten })
       const delegated = answers.filter(a => a.answer === AGENT_DECIDES).length
       if (left > 0 || delegated > 0) {
         $.ui.toast(`brain-dump: ${left > 0 ? `${left} gap(s) still open, see "Unresolved" or the missing sections` : ''}${left > 0 && delegated > 0 ? ' · ' : ''}${delegated > 0 ? `${delegated} left to the agent` : ''}`, { timeoutMs: 8000 })
@@ -188,7 +196,8 @@ export const register: Register = (on, options) => {
     }
     const force = forcePrefix.trim() === '' ? 'say "this is a brain dump"' : `"${forcePrefix}" first or last, or say "this is a brain dump"`
     const skip = skipPrefix.trim() === '' ? 'none' : `"${skipPrefix}" first`
-    const status = `mode ${mode} · rewrite at ${minWords}+ words · force: ${force} · skip: ${skip} · required (no intent) ${cfg.required.join(', ')} · questions ${askQuestions ? `on (max ${cfg.maxQuestions} per round, ${maxRounds} rounds, conversation ${cfg.useConversation ? 'on' : 'off'})` : 'off'} · review ${review ? 'on' : 'off'} · history ${keepHistory ? 'on' : 'off'} · model ${cfg.model}`
+    const gauntlet = `${gauntletPrefix.trim() === '' ? '' : `"${gauntletPrefix}" first or last, or `}say "make a gauntlet loop"`
+    const status = `mode ${mode} · rewrite at ${minWords}+ words · force: ${force} · skip: ${skip} · gauntlet loop: ${gauntlet} · required (no intent) ${cfg.required.join(', ')} · questions ${askQuestions ? `on (max ${cfg.maxQuestions} per round, ${maxRounds} rounds, conversation ${cfg.useConversation ? 'on' : 'off'})` : 'off'} · review ${review ? 'on' : 'off'} · history ${keepHistory ? 'on' : 'off'} · model ${cfg.model}`
     return { text: word === '' || word === 'status' ? `brain-dump: ${status}` : `brain-dump: unknown option "${args}"\n${HELP}` }
   })
 }

@@ -26,6 +26,7 @@ Requires a Claude Code build that runs mods (hooks modules); tested on 2.1.310.
 
 - A prompt of 120 words or more. In `confirm` mode (the default) it asks first.
 - A prompt that starts or ends with `bd`, or that says "this is a brain dump" at the start of a sentence. Always rewritten, in any mode.
+- A prompt that starts or ends with `gl`, or that asks to "make a gauntlet loop" ("create", "build", "write" and "set up" work too), becomes a Gauntlet Loop prompt. See below.
 - A prompt that starts with `raw` is never rewritten; the prefix is removed.
 
 Slash commands and prompts that do not come from you (SDK, scheduled tasks, other plugins) are never touched. If anything fails, your prompt is sent as you typed it.
@@ -36,12 +37,27 @@ Slash commands and prompts that do not come from you (SDK, scheduled tasks, othe
 2. It asks up to 3 questions about missing required sections and unclear points. Every question offers "Let the agent decide"; open ones also offer "Leave it out". You can type your own answer.
 3. It writes the prompt, checks it for gaps again (up to 2 rounds), and puts it in the prompt box. `/braindump original` brings back what you said.
 
-## Settings
+## Gauntlet loops
+
+A [Gauntlet Loop](https://github.com/robonuggets/gauntlet-loop) prompt makes an agent pick a real reference (the bar), split the work into small pieces, and run a builder and a separate harsh critic on each piece. It loops until the critic picks our work over the bar in a blind comparison. The technique is [Matt Shumer's](https://github.com/mshumer).
+
+```
+gl a pricing page for my SaaS, has to feel trustworthy
+```
+
+brain-dump reads the conversation and your request, then asks about what the template needs:
+
+- **Bar**: a named thing the critic can actually fetch and put side by side with ours. When you named none, or a vague one ("award-winning sites"), it offers 2 or 3 concrete candidates and no "Let the agent decide". You can type your own.
+- **Judged on**: what the critic decides, such as "which one a non-engineer understands faster".
+- **Measurable half**: a number to beat as well, when the goal has one.
+
+It never asks about architecture, stack, round counts, budget or tools. A budget, tools or pieces go into the prompt only if you named them. The prompt is the skill's template, filled in. Its fixed lines are written by the mod, not the model: the harsh critic, `/loop` until it wins blind, the live progress page, and "Fan out subagents and ultracode". Paste it into a fresh session, or send it here.
+
 
 Set them when you enable the plugin, in `/config`, or with `/braindump`:
 
 ```
-/braindump                      show the settings
+/braindump                      show the settings (the gauntlet prefix is the gauntletPrefix setting)
 /braindump confirm|auto|off|on  set the mode (on = confirm)
 /braindump min <words>          set the length that counts as a brain dump
 /braindump sections <a, b, c>   set the required sections for a request no intent fits

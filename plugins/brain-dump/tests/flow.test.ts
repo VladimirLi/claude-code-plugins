@@ -170,10 +170,40 @@ test('saying it is a brain dump skips the confirm dialog and the status says why
   expect(calls.rewrites[0]).toContain('it’s a brain dump')
 })
 
+test('"gl" builds a gauntlet loop: candidate bars are offered, the pick fills the template', OPTIONS, async ($, on) => {
+  const { calls, clock } = engine(on, {
+    fork: { isAnswered: true, usage: USAGE, text: '{"intent":"bug","resolved":[],"questions":[{"question":"Which bar should it beat?","header":"Bar","options":["Stripe pricing page","Linear pricing page","Vercel pricing page"]}]}' },
+    rewrites: [
+      'Goal: Build a pricing page for my SaaS.\n\nJudged on: which one a buyer trusts faster',
+      'Goal: Build a pricing page for my SaaS.\n\nBar: Linear pricing page (linear.app/pricing)\n\nJudged on: which one a buyer trusts faster',
+    ],
+    answer: () => 'Linear pricing page',
+  })
+
+  const first = await $.prompt.submit(submit('gl a pricing page for my SaaS'))
+  await clock.advance(200)
+
+  expect(first.drop).toContain('read as a gauntlet loop')
+  expect(calls.statuses[0]).toContain('"gl"')
+  // The trigger fixes the intent, whatever the analysis picks.
+  expect(calls.forks[0]).toContain('{"intent":"gauntlet"')
+  expect(calls.systems[0]).toContain('Bar:')
+  // The first rewrite dropped the bar, so it is asked again with the same candidates and no way out.
+  expect(calls.asked.map(q => q.options)).toEqual([
+    ['Stripe pricing page', 'Linear pricing page', 'Vercel pricing page'],
+    ['Stripe pricing page', 'Linear pricing page', 'Vercel pricing page'],
+  ])
+  expect(calls.filled).toHaveLength(1)
+  expect(calls.filled[0]!.startsWith('Build a pricing page for my SaaS.\n\nThe bar is Linear pricing page (linear.app/pricing).')).toBe(true)
+  expect(calls.filled[0]).toContain('says which one a buyer trusts faster,')
+  expect(calls.filled[0]!.endsWith('Fan out subagents and ultracode.')).toBe(true)
+})
+
 test('/braindump shows every way to force or skip a rewrite', async $ => {
   const r = await $.command.run({ command: 'braindump', args: '', origin: { kind: 'plugin', name: 'test' }, presentation: { isFullscreen: false, columns: 120 } })
   expect(r.text).toContain('"bd" first or last, or say "this is a brain dump"')
   expect(r.text).toContain('skip: "raw" first')
+  expect(r.text).toContain('gauntlet loop: "gl" first or last, or say "make a gauntlet loop"')
 })
 
 test('/braindump on turns the mode back to confirm', async ($, on) => {
