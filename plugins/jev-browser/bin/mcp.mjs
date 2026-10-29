@@ -18,13 +18,13 @@ const TOOLS = [
   },
   {
     name: "do",
-    description: "Reach ONE observable outcome on the current page (e.g. \"Log in\", \"Add the backpack to the cart\"). Jev (a fast decision model) picks each step; text is never invented: pass what to type in `values` by key (keys like password/token/card are secrets: Jev sees only the key, output is scrubbed). Returns status: done | likely_done (verify) | needs_confirmation (an irreversible action is pending; repeat with allow_irreversible only if the user asked for it) | needs_login | needs_human (captcha) | not_found (the option the goal names does not exist; nothing was changed) | blocked | stuck | ambiguous | error | max_actions, the actions taken, and the page. When not done, take over with act.",
+    description: "Reach ONE observable outcome on the current page (e.g. \"Log in\", \"Add the backpack to the cart\"). Jev (a fast decision model) picks each step; text is never invented: pass what to type in `values` by key (keys like password/token/card are secrets: Jev sees only the key, output is scrubbed). Returns status: done | likely_done (verify) | needs_confirmation (an irreversible action is pending; repeat with allow_irreversible only if the user asked for it) | needs_login | needs_human (captcha) | not_found (the option the goal names does not exist; nothing was changed) | blocked | stuck | ambiguous | error | max_actions (with `next:`, the planned action), the actions taken, and the page. When not done, take over with act.",
     inputSchema: {
       type: "object",
       properties: {
         goal: str("One observable outcome, phrased as an instruction"),
         values: { type: "object", additionalProperties: { type: "string" }, description: "Text to type / options / file paths, by key" },
-        max_actions: { type: "integer", minimum: 1, maximum: 30, description: "Default 10" },
+        max_actions: { type: "integer", minimum: 1, maximum: 30, description: "A backstop, not the stop rule (repeat and wait checks end bad runs). Default: 10 + the number of values, at least 20, at most 30. A sure next step may run up to 5 past it. When it still runs out, `next:` names the planned action for one act call." },
         allow_irreversible: { type: "boolean", description: "Allow buy/pay/delete/send/submit-order actions and risky confirm dialogs. Only when the user asked for that outcome." },
         vision: { type: "boolean", description: "Also show Jev a screenshot (canvas, maps, image-only widgets)" },
       },

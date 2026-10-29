@@ -13,6 +13,11 @@ const MAX_SINGLE = 240, GROUP = 30, MAX_STATE_CHARS = 70_000;
 const WAIT_STEP = 8000, WAIT_BUDGET = 18_000, MAX_WAITS = 30;
 const COMPLETE_Q = { type: "noul", instructions: "Is everything `task.goal` asks for already finished on `page`, so that no further action (such as pressing a submit, search or continue button) is needed?" };
 const ACTION_DONE_Q = { type: "noul", instructions: "Has an action in `task.history` already performed what `task.goal` asks for (for example the drag, scroll, click or entry it names), and does `task.last_change` show the page changed the way that action should change it?" };
+const MAX_BUDGET = 30, EXTRA_ROUNDS = 5;
+const defaultBudget = (values) => Math.min(MAX_BUDGET, Math.max(20, 10 + Object.keys(values ?? {}).length));
+// goals that go to a place ("Open the site's pricing page"): the words naming it must be on the page
+const NAV_GOAL = /^\s*(open|go to|navigate to|visit|show)\b/i;
+const NAV_STOP = new Set("open go to navigate visit show the a an this that its it site site s website web page pages tab tabs link links section area category article view of on in for about and with from linked new main top first second last my our your me repository repo".split(" "));
 const UNSURE = "the page looks done but Jev is unsure; verify with check or observe";
 
 const TOOLS = {
@@ -291,15 +296,29 @@ export class Agent {
     return +(c.answers.complete?.noul ?? 0).toFixed(2);
   }
 
+  // The goal's naming words (for a NAV_GOAL) that appear nowhere in the whole page text, title,
+  // url or element labels and links, or null when any of them does (or none can be judged).
+  async missingNames(page, goal) {
+    const words = norm(goal.replace(NAV_GOAL, "")).split(" ").filter((w) => w.length >= 3 && !NAV_STOP.has(w) && !/^\d+$/.test(w));
+    if (!words.length) return null;
+    const full = await this.tab.J("readText", 200_000).catch(() => page.text);
+    const hay = ` ${norm([page.url, page.title, full, ...page.elements.flatMap((e) => [e.label, e.text, e.href, e.name, e.placeholder])].filter(Boolean).join(" "))} `;
+    const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
+    return words.every((w) => !hay.includes(` ${stem(w)}`)) ? words : null;
+  }
+
   // Whether the action a goal names (drag, scroll…) was done, judged from history and the last diff.
   async actionDone(page, goal, history, lastChange) {
     const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, history: hist(history.filter((h) => h.action || h.event).slice(-10)), ...(lastChange ? { last_change: lastChange } : {}) } }, this.secrets), { action_done: ACTION_DONE_Q });
     return +(x.answers.action_done?.noul ?? 0).toFixed(2);
   }
 
-  async do({ goal, values = {}, max_actions = 10, allow_irreversible = false, vision = false }) {
+  async do({ goal, values = {}, max_actions, allow_irreversible = false, vision = false }) {
     const t0 = Date.now(), calls0 = stats.calls, tab = this.tab;
-    max_actions = Math.min(Math.max(1, max_actions | 0 || 10), 30);
+    // The budget is a backstop, not the stop rule: the repeat checks, the wait time limit and
+    // the fallback cap end bad runs. A fixed 10 cut saucedemo-coarse (11 actions) one click short.
+    max_actions = Math.min(Math.max(1, max_actions | 0 || defaultBudget(values)), MAX_BUDGET);
+    let limit = max_actions;
     this.remember(values);
     const history = [], rounds = [];
     let prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange;
@@ -307,7 +326,7 @@ export class Agent {
     // dialogs opened by this do's actions: part of what the page showed, for the confirm question
     const dialogs = () => history.filter((h) => h.dialog).map((h) => h.dialog);
     tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
-    for (let round = 0; round <= max_actions; round++) {
+    for (let round = 0; round <= limit; round++) {
       page = await tab.snapshot();
       for (const e of this.events()) history.push({ event: e });
       if (page.captcha) { status = "needs_human"; info = "the page shows a captcha or bot check; a person has to solve it"; break; }
@@ -320,6 +339,7 @@ export class Agent {
       const n = (q) => a[q]?.noul ?? 0;
       const done = Math.max(n("done"), n("done_change"));
       const r = { round, done: +done.toFixed(2), tool: act.tool, target: act.target, p_target: +act.p_target.toFixed(2), el: brief(act.el), irreversible: +n("irreversible").toFixed(2), login: +n("login").toFixed(2), error: +n("error").toFixed(2), candidates: act.candidates };
+      if (round > 0) r.changed = !!lastChange && !lastChange.nothing_changed;
       rounds.push(r);
 
       // a sign-in wall and no credentials: hand back before judging "done" (a redirect to a
@@ -366,7 +386,6 @@ export class Agent {
         if (c >= 0.65 || (c >= 0.45 && settled)) { status = "done"; if (c < 0.65) info = "every given value was entered and Jev sees nothing left to do"; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
       }
-      if (round === max_actions) break;
       if (n("login") >= 0.7 && !Object.keys(values).length) { status = "needs_login"; info = "the page wants a sign-in and no values were given; pass credentials in values, or log in by hand in the jevb profile"; break; }
       if (round > 0 && n("error") >= 0.7) { status = "error"; info = "the page shows an error after the last action"; break; }
       // the last action opened a JS dialog: never run it again or fall back to another action
@@ -378,7 +397,17 @@ export class Agent {
         if (c >= 0.45 || ad >= 0.5) { status = "likely_done"; info = `the ${lastAct.action} opened a dialog (${lastAct.dialog}), so it was not repeated; verify with check or observe`; break; }
         status = "stuck"; info = `the ${lastAct.action} on ${lastAct.element} opened a dialog (${lastAct.dialog}) but the goal does not look met; it was not repeated`; break;
       }
-      if (act.tool === "none" && round === 0 && !retried) { retried = true; await sleep(1000); round--; rounds.pop(); continue; }
+      // the goal names a page, tab or section that exists nowhere on this page (neg-missing-page:
+      // "pricing" on Books to Scrape scrolled 3 times, 12 Jev calls): say so before scrolling
+      if (NAV_GOAL.test(goal) && !history.some((h) => h.action && !/^scroll/.test(h.action))
+        && (/^scroll/.test(act.tool) || act.tool === "none" || (TARGETED.has(act.tool) && act.p_target < 0.4))) {
+        const missing = await this.missingNames(page, goal);
+        if (missing) { status = "not_found"; info = `nothing on this page mentions ${missing.map((w) => `"${w}"`).join(", ")}, which the goal names; nothing was changed`; break; }
+      }
+      // no action on the first look: ask again only while the page is still loading
+      if (act.tool === "none" && round === 0 && !retried && (tab.loading || !page.elements.length || page.elements.some((e) => e.busy) || [...tab.inflight.values()].some((s) => Date.now() - s < 2000))) {
+        retried = true; await tab.waitChange(page, 1500).catch(() => {}); round--; rounds.pop(); continue;
+      }
       if (act.tool === "none") {
         const c = await confirm();
         if (c >= 0.65) { status = "done"; break; }
@@ -481,6 +510,18 @@ export class Agent {
           break;
         }
       }
+      // budget reached: run this one action anyway (up to EXTRA_ROUNDS more) when it is a sure
+      // step on a page that is still moving; otherwise hand it back as `next` for one act call
+      if (round >= limit) {
+        const sure = (a.tool?.probabilities?.[act.tool] ?? 0) >= 0.8 && (!TARGETED.has(act.tool) || act.p_target >= 0.8)
+          && (seen.get(key) ?? 0) < 2 && !(repeatsBlock(seq, 2, 2) || repeatsBlock(seq, 3, 2) || repeatsBlock(seq, 1, 4))
+          && rounds.slice(-2).some((x) => x.changed);
+        if (sure && limit < max_actions + EXTRA_ROUNDS) { limit++; r.over_budget = true; }
+        else {
+          pending = { op: act.tool, id: act.target, element: brief(act.el), ...(act.valueKey && ["type", "select", "upload"].includes(act.tool) ? { value_key: act.valueKey } : {}), ...(act.tool === "select" && act.value != null ? { option: act.value } : {}), ...(act.key ? { key: act.key } : {}), ...(act.to != null ? { to: act.to } : {}) };
+          gate = "budget"; break;
+        }
+      }
       const h = { action: act.tool, element: brief(act.el), id: act.target, url: page.url };
       if (act.tool === "select" && act.value != null) h.option = act.value;
       if (act.valueKey && ["type", "select", "upload"].includes(act.tool)) h.value = act.valueKey;
@@ -532,7 +573,8 @@ export class Agent {
     this.shown = final;
     const lines = [`status: ${status}`];
     if (info) lines.push(`info: ${info}`);
-    if (pending) lines.push(`pending: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""} ${pending.element}${pending.dialog ? ` dialog "${pending.dialog}"` : ""} (gate: ${gate ?? "dialog"})`);
+    if (pending && gate === "budget") { if (status !== "done") lines.push(`next: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""} ${pending.element}${pending.value_key ? ` <- values.${pending.value_key}` : ""}${pending.option ? ` = "${pending.option}"` : ""}${pending.key ? ` key=${pending.key}` : ""}${pending.to != null ? ` -> [${pending.to}]` : ""} (the planned action when the budget ran out; run it with act)`); }
+    else if (pending) lines.push(`pending: ${pending.op}${pending.id != null ? ` [${pending.id}]` : ""} ${pending.element}${pending.dialog ? ` dialog "${pending.dialog}"` : ""} (gate: ${gate ?? "dialog"})`);
     lines.push(`actions (${history.filter((h) => h.action).length}, ${stats.calls - calls0} Jev calls, ${Date.now() - t0} ms):`);
     for (const h of history) lines.push(h.event ? `  ~ ${h.event}` : `  - ${h.action}${h.element ? ` ${h.element}` : ""}${h.value ? ` <- values.${h.value}` : ""}${h.option ? ` = "${h.option}"` : ""}${h.key ? ` key=${h.key}` : ""}${h.destination ? ` -> ${h.destination}` : ""}${h.note ? ` (${h.note})` : ""}${h.dialog ? ` [dialog: ${h.dialog}]` : ""}${h.error ? ` ERROR ${h.error}` : ""}`);
     if (["ambiguous", "stuck", "max_actions"].includes(status) && rounds.at(-1)?.candidates) lines.push(`candidates: ${rounds.at(-1).candidates.map((c) => `[${c.id}] ${c.el} p=${c.p}`).join("; ")}`);
