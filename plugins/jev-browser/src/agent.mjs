@@ -3,7 +3,7 @@
 import { jev, stats } from "./jev.mjs";
 import { KEY_NAMES } from "./tab.mjs";
 import { brief, renderPage, renderDiff, pageDiff, diffForJev } from "./format.mjs";
-import { fence, scrub, secretsOf, redactValues, irreversibleRule, dialogRisky, domainAllowed, REDACTED } from "./safety.mjs";
+import { fence, scrub, secretsOf, redactValues, irreversibleRule, dialogRisky, domainAllowed, REDACTED, SECRET_KEY } from "./safety.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_SINGLE = 240, GROUP = 30, MAX_STATE_CHARS = 70_000;
@@ -19,6 +19,13 @@ const defaultBudget = (values) => Math.min(MAX_BUDGET, Math.max(20, 10 + Object.
 const NAV_GOAL = /^\s*(open|go to|navigate to|visit|show)\b/i;
 const NAV_STOP = new Set("open go to navigate visit show the a an this that its it site site s website web page pages tab tabs link links section area category article view of on in for about and with from linked new main top first second last my our your me repository repo".split(" "));
 const UNSURE = "the page looks done but Jev is unsure; verify with check or observe";
+// words of any goal that name no thing on a page (verbs, fillers): the rest must show up in the
+// visible text or elements, or the page may not be showing what the goal is about yet
+const GOAL_STOP = new Set([...NAV_STOP, ..."close click press type enter fill select choose pick make add remove delete mark check checked uncheck unchecked sort search find look drag drop scroll wait until trigger accept dismiss reveal hover hovering upload submit then given values value field fields button buttons input inputs text there exactly only all each every more load loading start their them they using use what which where when into onto over under name number item items says saying called named labelled labeled".split(" ")]);
+// the round-0 wait for content a timer shows (entry ads, delayed modals); it runs alongside
+// the first decision, so it costs only what it outlasts that call
+const SHOW_WAIT = 800;
+const IMAGE_NOTE = " The image `screenshot` shows the visible part of the page: each element of `page.elements` in view is outlined with its `i` in a small red tag at its top-left corner, and its `box` is [x, y, width, height] in the image's pixels.";
 
 const TOOLS = {
   click: "Click the target (link, button, checkbox, radio, tab, menu item, option, table header)",
@@ -75,10 +82,10 @@ function repeated(elements) {
   const rep = Object.entries(counts).filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 10);
   return rep.length ? Object.fromEntries(rep) : undefined;
 }
-const forJev = (page, typed) => ({
+const forJev = (page, typed, boxes) => ({
   url: page.url, title: page.title, text: page.text, dialogs: page.dialogs?.length ? page.dialogs : undefined, tables: page.tables, metrics: page.metrics,
   repeated_elements: repeated(page.elements),
-  elements: page.elements.map(({ id, new: _n, ...e }) => ({ i: id, ...e, ...(e.value === "[filled]" && typed?.has(id) ? { value: `[filled with values.${typed.get(id)}]` } : {}) })),
+  elements: page.elements.map(({ id, new: _n, ...e }) => ({ i: id, ...e, ...(e.value === "[filled]" && typed?.has(id) ? { value: `[filled with values.${typed.get(id)}]` } : {}), ...(boxes?.[id] ? { box: boxes[id] } : {}) })),
 });
 
 // forJev within the single-request budget: big pages (Wikipedia, HN) keep the first elements
@@ -152,7 +159,7 @@ export class Agent {
   async check({ question, vision = false }) {
     await this.tab.settle({ cap: 1500 });
     const page = await this.tab.snapshot();
-    const image = vision ? await this.tab.screenshot() : undefined;
+    const image = vision ? await this.shot(page) : undefined;
     const st = scrub({ page: forJevCapped(page) }, this.secrets);
     const { answers, ms } = await jev(st, { q: { type: "noul", instructions: `Answer about \`page\`${vision ? " and the image `screenshot`" : ""}: ${question}` } }, { image });
     const p = answers.q?.noul;
@@ -233,8 +240,8 @@ export class Agent {
     };
     if (hasValues) common.value = { type: "choice", instructions: "If the next action toward `task.goal` types, selects or uploads something, which of `task.values` should it use? Prefer values not yet entered on `page`.", criteria: Object.fromEntries(Object.entries(shownValues).map(([k, v]) => [k, v])) };
     const targetQ = { type: "choice", instructions: "Which entry of `page.elements` (by its `i`) should the next action toward `task.goal` act on?" };
-    const jp = forJev(page, this.typed);
-    if (image) targetQ.instructions += " The image `screenshot` shows the page.";
+    const jp = forJev(page, this.typed, image ? page.boxes : null);
+    if (image) targetQ.instructions += IMAGE_NOTE;
     const call = (state, qs) => jev(scrub(state, this.secrets), qs, { image });
     if (page.elements.length <= MAX_SINGLE && JSON.stringify(jp).length <= MAX_STATE_CHARS) {
       const qs = { ...common };
@@ -307,6 +314,30 @@ export class Agent {
     return words.every((w) => !hay.includes(` ${stem(w)}`)) ? words : null;
   }
 
+  // Content words of any goal that appear nowhere in the visible page (text, title, url,
+  // element labels), or null when every one does. A word missing here means the page may not
+  // show yet what the goal is about (an ad a timer opens), or shows it only as pixels.
+  async unseen(page, goal) {
+    const words = norm(goal.replace(/'[^']*'|"[^"]*"/g, " ")).split(" ").filter((w) => w.length >= 4 && !GOAL_STOP.has(w) && !/\d/.test(w));
+    if (!words.length) return null;
+    const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
+    const hayOf = (t) => ` ${norm([page.url, page.title, t, ...(page.dialogs ?? []), ...page.elements.flatMap((e) => [e.label, e.text, e.href, e.name, e.placeholder, e.hint, e.near])].filter(Boolean).join(" "))} `;
+    let hay = hayOf(page.text), miss = words.filter((w) => !hay.includes(` ${stem(w)}`));
+    if (miss.length && page.metrics?.text_length > page.text.length) {
+      hay = hayOf(await this.tab.J("readText", 200_000).catch(() => page.text));
+      miss = words.filter((w) => !hay.includes(` ${stem(w)}`));
+    }
+    return miss.length ? miss : null;
+  }
+
+  // A screenshot with each in-view element's [i] mark drawn on it.
+  // None while a secret value typed into a plain (non-password) field is in view: Jev gets
+  // secrets by key only, and pixels would show the value.
+  shot(page) {
+    const exposed = page.elements.some((e) => page.boxes?.[e.id] && e.tag !== "input:password" && SECRET_KEY.test(this.typed.get(e.id) ?? ""));
+    return exposed ? Promise.resolve(undefined) : this.tab.screenshot({ boxes: page.boxes }).catch(() => undefined);
+  }
+
   // Whether the action a goal names (drag, scroll…) was done, judged from history and the last diff.
   async actionDone(page, goal, history, lastChange) {
     const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, history: hist(history.filter((h) => h.action || h.event).slice(-10)), ...(lastChange ? { last_change: lastChange } : {}) } }, this.secrets), { action_done: ACTION_DONE_Q });
@@ -321,7 +352,7 @@ export class Agent {
     let limit = max_actions;
     this.remember(values);
     const history = [], rounds = [];
-    let prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange;
+    let prev = null, page = null, waits = 0, waitedMs = 0, status = "max_actions", info, pending, retried = false, gate, conf = null, fallbacks = 0, lastChange, showWaited = false;
     const seen = new Map();
     // dialogs opened by this do's actions: part of what the page showed, for the confirm question
     const dialogs = () => history.filter((h) => h.dialog).map((h) => h.dialog);
@@ -330,15 +361,41 @@ export class Agent {
       page = await tab.snapshot();
       for (const e of this.events()) history.push({ event: e });
       if (page.captcha) { status = "needs_human"; info = "the page shows a captcha or bot check; a person has to solve it"; break; }
-      const useImage = vision || page.elements.length === 0;
-      const image = useImage ? await tab.screenshot().catch(() => undefined) : undefined;
+      // The image goes in only on signals from the loop: --vision, a page with no elements, the
+      // last action hit a covering element, or (after a text decision) a weak target or a goal
+      // word the text does not show. Each screenshot costs a capture and a heavier Jev call.
+      const acted = history.some((h) => h.action && h.action !== "wait");
+      const lastErr = history.filter((h) => h.action && h.action !== "wait").at(-1)?.error ?? "";
+      let why = vision ? "vision" : page.elements.length === 0 ? "no_elements" : /covered by/.test(lastErr) ? "covered" : null;
+      let image = why ? await this.shot(page) : undefined;
+      const missing = await this.unseen(page, goal).catch(() => null);
       lastChange = round ? withDialog(diffForJev(pageDiff(prev, page)), history.filter((h) => h.action && h.action !== "wait").at(-1)) : undefined;
-      const a = await this.decide(page, goal, values, hist(history.slice(-12)), lastChange, image);
+      // round 0 and the goal names something the page does not show: a timer may be about to
+      // show it (entry_ad: the modal opens ~1 s after load, with the tab idle), so watch for a
+      // page change while the first decision runs
+      const showP = round === 0 && !acted && !showWaited && missing ? (showWaited = true, tab.J("waitChange", page.at, SHOW_WAIT).catch(() => ({ changed: true }))) : null;
+      let a = await this.decide(page, goal, values, hist(history.slice(-12)), lastChange, image);
+      let act = this.resolve(page, a, values);
+      if (showP) {
+        const sure = act.tool !== "none" && (a.tool?.probabilities?.[act.tool] ?? 0) >= 0.8 && (!TARGETED.has(act.tool) || act.p_target >= 0.8) && Math.max(a.done?.noul ?? 0, a.done_change?.noul ?? 0) < 0.5;
+        const w = sure ? await Promise.race([showP, sleep(0).then(() => null)]) : await showP;
+        if (w?.changed || tab.loading) { await tab.settle({ cap: 2000 }); history.push({ event: `the page changed ${w?.waited ?? 0} ms into the first look; looked again` }); round--; continue; }
+      }
+      // the text decision is weak where an image can help: look again with the marked screenshot.
+      // Unseen goal words count only before the first action: after one, a missing word is often
+      // the result ("close the modal": the modal is gone)
+      let textA = null;
+      if (!image && ((TARGETED.has(act.tool) && act.p_target < 0.4) || (missing && !acted && (act.tool === "none" || (TARGETED.has(act.tool) && act.p_target < 0.6))))) {
+        why = TARGETED.has(act.tool) && act.p_target < 0.4 ? "weak_target" : "unseen_words";
+        image = await this.shot(page);
+        if (image) { textA = a; a = await this.decide(page, goal, values, hist(history.slice(-12)), lastChange, image); act = this.resolve(page, a, values); }
+      }
       prev = page;
-      const act = this.resolve(page, a, values);
       const n = (q) => a[q]?.noul ?? 0;
-      const done = Math.max(n("done"), n("done_change"));
-      const r = { round, done: +done.toFixed(2), tool: act.tool, target: act.target, p_target: +act.p_target.toFixed(2), el: brief(act.el), irreversible: +n("irreversible").toFixed(2), login: +n("login").toFixed(2), error: +n("error").toFixed(2), candidates: act.candidates };
+      // the image's done judge never ends a run before any action: a screenshot taken before
+      // the page finished showing reads as "already done" (entry_ad with --vision ended likely_done)
+      const done = image && !acted ? (textA ? Math.max(textA.done?.noul ?? 0, textA.done_change?.noul ?? 0) : 0) : Math.max(n("done"), n("done_change"));
+      const r = { round, done: +done.toFixed(2), tool: act.tool, target: act.target, p_target: +act.p_target.toFixed(2), el: brief(act.el), irreversible: +n("irreversible").toFixed(2), login: +n("login").toFixed(2), error: +n("error").toFixed(2), candidates: act.candidates, ...(image ? { image: why } : {}), ...(missing ? { unseen: missing } : {}), ...(textA ? { text_pick: { tool: textA.tool?.choice, p_target: +(Object.values(textA.target?.probabilities ?? {}).sort((x, y) => y - x)[0] ?? 0).toFixed(2) } } : {}) };
       if (round > 0) r.changed = !!lastChange && !lastChange.nothing_changed;
       rounds.push(r);
 
@@ -513,7 +570,7 @@ export class Agent {
       // budget reached: run this one action anyway (up to EXTRA_ROUNDS more) when it is a sure
       // step on a page that is still moving; otherwise hand it back as `next` for one act call
       if (round >= limit) {
-        const sure = (a.tool?.probabilities?.[act.tool] ?? 0) >= 0.8 && (!TARGETED.has(act.tool) || act.p_target >= 0.8)
+        const sure = act.tool !== "none" && (a.tool?.probabilities?.[act.tool] ?? 0) >= 0.8 && (!TARGETED.has(act.tool) || act.p_target >= 0.8)
           && (seen.get(key) ?? 0) < 2 && !(repeatsBlock(seq, 2, 2) || repeatsBlock(seq, 3, 2) || repeatsBlock(seq, 1, 4))
           && rounds.slice(-2).some((x) => x.changed);
         if (sure && limit < max_actions + EXTRA_ROUNDS) { limit++; r.over_budget = true; }

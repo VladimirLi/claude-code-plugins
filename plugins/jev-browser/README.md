@@ -57,7 +57,9 @@ The first command starts the daemon, and the daemon starts Chrome. Both stay war
 
 ## Images
 
-Jev accepts images: base64 JPEG/PNG assets with the `TypeSafe-Danger-Zone-Images: true` header ([docs](https://docs.typesafe.ai/images)). `do --vision` and `check --vision` attach a viewport screenshot. `do` also attaches one by itself when a page has no elements to choose from.
+Jev accepts images: base64 JPEG/PNG assets with the `TypeSafe-Danger-Zone-Images: true` header ([docs](https://docs.typesafe.ai/images)). `do --vision` and `check --vision` attach a viewport screenshot. Without the flag, `do` attaches one only on signals from its loop: the page has no elements, the last action hit a covering element ("covered by …"), the text decision has a weak target (p < 0.4), or, before the first action, a word the goal names is nowhere in the visible text (with a target p < 0.6 or no action). The screenshot carries each in-view element's `[i]` mark, and each element sent with it carries its `box` [x, y, w, h], so Jev can name a target from the image. The image's done judge never ends a run before the first action. No screenshot is taken while a secret value typed into a plain (non-password) field is in view.
+
+When the goal names something the page does not show yet, `do` watches for a page change for up to 800 ms while its first decision runs (an ad or modal opened by a timer), and looks again if one comes.
 
 ## Files
 

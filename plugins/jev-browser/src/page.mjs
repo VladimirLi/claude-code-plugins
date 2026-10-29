@@ -117,7 +117,7 @@ export const INSTALL = function (VERSION) {
     hidCache = new Map(); srCache = new Map();
     if (J.next < start) J.next = start;
     const { all, xframes } = collect();
-    const out = [], seen = new Set(), now = new Set(), W = innerWidth, H = innerHeight;
+    const out = [], boxes = {}, seen = new Set(), now = new Set(), W = innerWidth, H = innerHeight;
     for (const [el, frame] of all) {
       const tag = el.tagName.toLowerCase();
       let pick = el.matches(SEL);
@@ -219,6 +219,8 @@ export const INSTALL = function (VERSION) {
       if (!J.prev.has(id) && J.prev.size) o.new = true;
       now.add(id);
       out.push({ id, ...o });
+      // viewport box (top-level px) for the image fallback: lets Jev tie what it sees to an `i`
+      if (!hidden && inView) boxes[id] = [Math.round(off.x + rr.left), Math.round(off.y + rr.top), Math.round(rr.width), Math.round(rr.height)];
       if (out.length >= maxEls) break;
     }
     for (const [id, v] of J.els) if (!v.el.isConnected) J.els.delete(id);
@@ -278,7 +280,7 @@ export const INSTALL = function (VERSION) {
     return {
       url: location.href, title: document.title, text, at: { origin: performance.timeOrigin, t: performance.now() },
       metrics: { scroll_y: Math.round(scrollY), page_height: document.documentElement.scrollHeight, viewport_h: H, text_length: full.length, elements: out.length, cross_origin_frames: xframes || undefined },
-      dialogs, captcha, tables: tables.length ? tables : undefined, elements: out, next: J.next,
+      dialogs, captcha, tables: tables.length ? tables : undefined, elements: out, boxes, next: J.next,
     };
   };
 
@@ -391,6 +393,30 @@ export const INSTALL = function (VERSION) {
     return best || { h: innerHeight, x: innerWidth / 2, y: innerHeight / 2 };
   };
   J.scrollSum = () => { let s = scrollY; for (const el of document.querySelectorAll("body *")) if (el.scrollTop) s += el.scrollTop; return s; };
+  // Draw each element's [i] mark over the page for one screenshot (pointer-events: none, in a
+  // closed shadow root on <html>, so hit tests and the page's own body observers never see it).
+  // The jevb mutation stamp is not moved: the marks are not a page change.
+  J.marks = (boxes) => {
+    const obs = window.__jevbMutObs, keep = window.__jevbMut;
+    J.unmark();
+    const host = document.createElement("jevb-marks"); host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+    const root = host.attachShadow({ mode: "closed" });
+    let html = "";
+    for (const [id, [x, y, w, h]] of Object.entries(boxes || {})) {
+      html += `<div style="position:fixed;left:${x}px;top:${y}px;width:${w}px;height:${h}px;outline:2px solid #e0115f;box-sizing:border-box"></div>`
+        + `<div style="position:fixed;left:${Math.max(0, x)}px;top:${Math.max(0, y - 14)}px;font:bold 11px/13px monospace;background:#e0115f;color:#fff;padding:0 2px">${+id}</div>`;
+    }
+    root.innerHTML = html;
+    document.documentElement.appendChild(host); J.markHost = host;
+    obs?.takeRecords(); window.__jevbMut = keep;
+    return Object.keys(boxes || {}).length;
+  };
+  J.unmark = () => {
+    const obs = window.__jevbMutObs, keep = window.__jevbMut;
+    J.markHost?.remove(); J.markHost = null;
+    obs?.takeRecords(); window.__jevbMut = keep;
+    return true;
+  };
   J.readText = (max = 12000) => clean(document.body?.innerText ?? "", max);
   J.mutated = () => performance.now() - (window.__jevbMut ?? 0);
   // Resolve on the first DOM change after `since` (a snapshot's `at`), or after `cap` ms.

@@ -218,9 +218,14 @@ export class Tab {
     return s;
   }
 
-  async screenshot() {
-    const { data } = await this.send("Page.captureScreenshot", { format: "jpeg", quality: 60 });
-    return data;
+  // boxes: { id: [x, y, w, h] } from a snapshot; each is drawn with its [id] mark for this
+  // one capture, then removed.
+  async screenshot({ boxes } = {}) {
+    const marked = boxes && Object.keys(boxes).length ? await this.J("marks", boxes).catch(() => 0) : 0;
+    try {
+      const { data } = await this.send("Page.captureScreenshot", { format: "jpeg", quality: 60 });
+      return data;
+    } finally { if (marked) await this.J("unmark").catch(() => {}); }
   }
 
   // ---------------------------------------------------------------- input
