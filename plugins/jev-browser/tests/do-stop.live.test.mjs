@@ -52,3 +52,19 @@ test("ti-dynamic-loading: done or likely_done in under 8 s, 5 of 5 runs", live, 
     }
   } finally { run(s, "close"); }
 });
+
+// a select whose option does not exist must not touch the page, and must not claim success
+test("neg-missing-option: Option 7 leaves the dropdown at \"\" and ends as not_found", live, () => {
+  const s = "test-missing-option";
+  try {
+    run(s, "open", "https://the-internet.herokuapp.com/dropdown");
+    const d = doJson(s, "Select Option 7 in the dropdown");
+    assert.equal(evalJs(s, "() => document.querySelector('#dropdown').value"), "");
+    assert.ok(!["done", "likely_done"].includes(d.status), `status ${d.status}`);
+    assert.equal(d.status, "not_found");
+    // the option that exists still works
+    const ok = doJson(s, "Select Option 2 in the dropdown");
+    assert.equal(evalJs(s, "() => document.querySelector('#dropdown').value"), "2");
+    assert.ok(["done", "likely_done"].includes(ok.status), `status ${ok.status}`);
+  } finally { run(s, "close"); }
+});

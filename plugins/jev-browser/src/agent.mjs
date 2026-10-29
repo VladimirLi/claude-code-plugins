@@ -35,6 +35,32 @@ const GUARDED = new Set(["click", "press_enter", "press_key"]);
 const FIELDISH = (e) => !!e && (/^(input:(text|email|password|search|tel|url|number|date|datetime-local|month|week|time|color|range)|textarea)/.test(e.tag) || /\[(textbox|searchbox|combobox|spinbutton)\]/.test(e.tag) || e.tag.startsWith("input:") && !/checkbox|radio|submit|button|reset|file|image/.test(e.tag));
 const SELECTISH = (e) => !!e && (e.tag === "select" || !!e.options);
 const FILEISH = (e) => !!e && e.tag === "input:file";
+// a goal that asks for a search, and a field that runs one: typing into it is not the search
+const SEARCHY_GOAL = /\b(search|find|look\s*up|filter|query)\b/i;
+const SEARCH_FIELD = (e) => !!e && (e.tag === "input:search" || /\[(searchbox|combobox)\]/.test(e.tag) || /search|filter|find|query/i.test(`${e.label ?? ""} ${e.placeholder ?? ""} ${e.name ?? ""}`));
+
+// Dropdown options against the words of the goal (or of the given value). An option is named
+// when its whole text appears in the words; "Option 7" names a missing sibling of "Option 2"
+// when an option's shape (its text with numbers as wildcards) matches the words but no option does.
+const norm = (s) => String(s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const PLACEHOLDER_OPT = /^(please )?(select|choose|pick)\b|^-+$|^$/i;
+const NO_OPTION = "(none of these options)";
+function namedOption(opts, words, fromValue) {
+  const w = ` ${norm(words)} `, nw = norm(words);
+  return opts.filter((o) => !PLACEHOLDER_OPT.test(o.trim()) && norm(o) && (w.includes(` ${norm(o)} `) || (fromValue && nw && norm(o).includes(nw))))
+    .sort((a, b) => b.length - a.length)[0];
+}
+function missingSibling(opts, words) {
+  const w = norm(words), have = new Set(opts.map(norm));
+  for (const o of opts) {
+    const n = norm(o);
+    if (!/\d/.test(n) || !/\p{L}/u.test(n)) continue;
+    const re = new RegExp(`(?:^| )(${n.split(/(\d+)/).map((p, k) => (k % 2 ? "\\d+" : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("")})(?= |$)`);
+    const m = w.match(re);
+    if (m && !have.has(m[1])) return m[1];
+  }
+  return null;
+}
 
 // Jev sees elements keyed by `i`; Claude sees `[id]`. Same number. `typed` maps element id ->
 // the values key typed into it, so a filled password field shows which value it holds (never the value).
@@ -60,6 +86,9 @@ function forJevCapped(page, typed) {
   }
   return { ...jp, elements: [], text: jp.text.slice(0, 20_000) };
 }
+
+// history as Jev sees it: without the element id and url code keeps for its own checks
+const hist = (hs) => hs.map(({ id: _i, url: _u, ...h }) => h);
 
 function repeatsBlock(seq, k, times) {
   if (seq.length < k * times) return false;
@@ -255,7 +284,7 @@ export class Agent {
 
   // Whether the action a goal names (drag, scroll…) was done, judged from history and the last diff.
   async actionDone(page, goal, history, lastChange) {
-    const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, history: history.filter((h) => h.action).slice(-8), ...(lastChange ? { last_change: lastChange } : {}) } }, this.secrets), { action_done: ACTION_DONE_Q });
+    const x = await jev(scrub({ page: forJevCapped(page, this.typed), task: { goal, history: hist(history.filter((h) => h.action).slice(-8)), ...(lastChange ? { last_change: lastChange } : {}) } }, this.secrets), { action_done: ACTION_DONE_Q });
     return +(x.answers.action_done?.noul ?? 0).toFixed(2);
   }
 
@@ -274,7 +303,7 @@ export class Agent {
       const useImage = vision || page.elements.length === 0;
       const image = useImage ? await tab.screenshot().catch(() => undefined) : undefined;
       lastChange = round ? diffForJev(pageDiff(prev, page)) : undefined;
-      const a = await this.decide(page, goal, values, history.slice(-12), lastChange, image);
+      const a = await this.decide(page, goal, values, hist(history.slice(-12)), lastChange, image);
       prev = page;
       const act = this.resolve(page, a, values);
       const n = (q) => a[q]?.noul ?? 0;
@@ -303,7 +332,25 @@ export class Agent {
       const enteredAll = Object.keys(values).length > 0 && lastAct && !lastAct.error && ["type", "select", "upload"].includes(lastAct.action)
         && Object.keys(values).every((k) => history.some((h) => h.value === k && !h.error));
       const settled = act.tool === "none" && done >= 0.7 && enteredAll;
-      if (done >= (round > 0 ? 0.5 : 0.9)) {
+      // a form submitted after every value was entered: code saw the page move to a new url
+      // with no error, which the page-only confirm cannot see ("Login" on saucedemo: the
+      // inventory page got confirm 0.22). A sign-in counts as done once the password field is gone.
+      const lastEntry = history.filter((h) => ["type", "select", "upload"].includes(h.action)).at(-1);
+      const submitted = Object.keys(values).length > 0 && Object.keys(values).every((k) => history.some((h) => h.value === k && !h.error))
+        && lastAct && !lastAct.error && ["click", "press_enter"].includes(lastAct.action) && lastEntry && page.url !== lastEntry.url && n("error") < 0.3;
+      const signedIn = submitted && /\b(log ?in|sign ?in)\b/i.test(goal) && !page.elements.some((e) => e.tag === "input:password") && n("login") < 0.3;
+      // a search goal whose words were typed but never submitted (github-issue-search: typed
+      // "flaky screenshot" and ended as done): press Enter in that field before any ending
+      const searchEl = lastAct?.action === "type" && !lastAct.error && lastAct.url === page.url && SEARCHY_GOAL.test(goal)
+        ? page.elements.find((e) => e.id === lastAct.id) : null;
+      // Jev's own click on the Search button (or Enter) runs instead of an ending; anything else
+      // (no action, a retype of the same field) becomes Enter in the field
+      const pendingSearch = SEARCH_FIELD(searchEl) && act.tool !== "select" && !(act.tool === "type" && act.target !== searchEl.id);
+      if (pendingSearch && !["click", "press_enter"].includes(act.tool)) {
+        Object.assign(act, { tool: "press_enter", target: searchEl.id, el: searchEl, p_target: 1 });
+        Object.assign(r, { tool: act.tool, target: act.target, el: brief(searchEl), forced_submit: true });
+      }
+      if (!pendingSearch && done >= (round > 0 ? 0.5 : 0.9)) {
         const c = await confirm();
         if (c >= 0.65 || (c >= 0.45 && settled)) { status = "done"; if (c < 0.65) info = "every given value was entered and Jev sees nothing left to do"; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
@@ -316,6 +363,8 @@ export class Agent {
         const c = await confirm();
         if (c >= 0.65) { status = "done"; break; }
         if (c >= 0.45) { status = "likely_done"; info = UNSURE; break; }
+        if (signedIn || (submitted && done >= 0.85)) { status = "done"; info = signedIn ? "signed in: the values were entered, the form was submitted and the sign-in form is gone" : "every given value was entered and the form was submitted to a new page without error"; break; }
+        if (submitted && done >= 0.7) { status = "likely_done"; info = "every given value was entered and the form was submitted to a new page; verify with check or observe"; break; }
         // the goal is not met but Jev sees nothing to do: take its next-best action instead of stopping
         const alt = n("blocked") < 0.5 && fallbacks < 3 && Object.entries(a.tool?.probabilities ?? {}).filter(([t]) => t !== "none" && t !== "wait").sort((x, y) => y[1] - x[1])[0];
         const alts = alt && alt[1] >= 0.1 ? this.resolve(page, { ...a, tool: { choice: alt[0], probabilities: a.tool.probabilities } }, values) : null;
@@ -359,17 +408,36 @@ export class Agent {
 
       // follow-up questions only for the chosen action
       if (act.tool === "select" && act.el?.options?.length) {
-        const opts = act.el.options;
-        const v = act.value != null && opts.find((o) => o.toLowerCase() === String(act.value).toLowerCase());
+        // never commit an option the goal does not ask for: a missing option ends the run before
+        // the page is touched (neg-missing-option: "Option 7" set the dropdown to "Option 2" twice)
+        const opts = act.el.options, fromValue = act.value != null, words = fromValue ? String(act.value) : goal;
+        const listed = `options: ${opts.map((o) => `"${o}"`).join(", ").slice(0, 400)}`;
+        const notFound = (what) => { status = "not_found"; info = `the dropdown ${brief(act.el)} has no option ${what}; ${listed}`; };
+        const v = (fromValue && opts.find((o) => o.toLowerCase() === words.toLowerCase())) || namedOption(opts, words, fromValue);
+        const missing = !v && missingSibling(opts, words);
         if (v) act.value = v;
+        else if (missing) { notFound(`"${missing}"`); break; }
         else {
-          const { answers } = await jev(scrub({ page: { url: page.url, title: page.title, text: page.text }, task: { goal, ...(Object.keys(values).length ? { values: redactValues(values) } : {}) }, dropdown: { label: act.el.label, options: opts } }, this.secrets), { opt: { type: "choice", instructions: "Which option of `dropdown.options` should be chosen for `task.goal`?", criteria: Object.fromEntries(opts.map((o) => [o, null])) } });
-          act.value = answers.opt?.choice; act.valueKey = undefined;
-          if (act.value == null) { status = "ambiguous"; info = "could not pick a dropdown option"; break; }
+          const crit = [...opts, NO_OPTION];
+          const { answers } = await jev(scrub({ page: { url: page.url, title: page.title, text: page.text }, task: { goal, ...(Object.keys(values).length ? { values: redactValues(values) } : {}) }, dropdown: { label: act.el.label, options: opts } }, this.secrets), { opt: { type: "choice", instructions: `Which option of \`dropdown.options\` does \`task.goal\` ask for? Answer "${NO_OPTION}" when the goal asks for an option that is not in the list.`, criteria: Object.fromEntries(crit.map((o) => [o, null])) } });
+          const pick = answers.opt?.choice;
+          if (pick == null) { status = "ambiguous"; info = "could not pick a dropdown option"; break; }
+          if (pick === NO_OPTION || (PLACEHOLDER_OPT.test(pick.trim()) && !/\b(reset|clear|placeholder|default|empty|none)\b/i.test(goal))) { notFound(fromValue ? "for the given value" : "matching the goal"); break; }
+          act.value = pick; act.valueKey = undefined;
+        }
+      }
+      // a select or type is a mutation: never run the same one twice in one do
+      if (["select", "type"].includes(act.tool) && act.target != null) {
+        const same = history.find((h) => !h.error && h.action === act.tool && h.id === act.target && (act.tool === "select" ? h.option === act.value : h.value === act.valueKey));
+        if (same) {
+          const c = await confirm();
+          status = c >= 0.65 ? "done" : c >= 0.45 ? "likely_done" : "stuck";
+          info = `${act.tool} on ${brief(act.el)} was already done in this run with the same ${act.tool === "select" ? "option" : "value"}, so it was not repeated${status === "done" ? "" : "; check the page"}`;
+          break;
         }
       }
       if (act.tool === "press_key") {
-        const { answers } = await jev(scrub({ page: { url: page.url, title: page.title, text: page.text, dialogs: page.dialogs }, task: { goal, history: history.slice(-6) } }, this.secrets), { key: { type: "choice", instructions: "Which keyboard key should be pressed next for `task.goal`?", criteria: Object.fromEntries(KEY_NAMES.map((k) => [k, null])) } });
+        const { answers } = await jev(scrub({ page: { url: page.url, title: page.title, text: page.text, dialogs: page.dialogs }, task: { goal, history: hist(history.slice(-6)) } }, this.secrets), { key: { type: "choice", instructions: "Which keyboard key should be pressed next for `task.goal`?", criteria: Object.fromEntries(KEY_NAMES.map((k) => [k, null])) } });
         act.key = answers.key?.choice ?? "Escape";
         if (!act.el || !FIELDISH(act.el)) act.target = null;
       }
@@ -384,13 +452,16 @@ export class Agent {
       if (GUARDED.has(act.tool) && !allow_irreversible) {
         const rule = act.tool !== "press_key" && irreversibleRule(act.el, page);
         if (rule || n("irreversible") >= 0.6) {
+          // the goal's form was already submitted to a new page: the gated click is a step past
+          // the goal ("Fill in the checkout information and continue" then wanted "Finish")
+          if (submitted && /\b(continue|submit|next|save|send|log ?in|sign ?in)\b/i.test(goal)) { status = "done"; info = `every given value was entered and the form was submitted to a new page; the next step ${brief(act.el)} is irreversible and was not run`; break; }
           status = "needs_confirmation"; info = `${rule || `Jev rates the next action as hard to undo (${n("irreversible").toFixed(2)})`}; call act with allow_irreversible, or do again with allow_irreversible, to proceed`;
           pending = { op: act.tool, id: act.target, element: brief(act.el), ...(act.key ? { key: act.key } : {}) };
           gate = rule ? "rule" : "jev";
           break;
         }
       }
-      const h = { action: act.tool, element: brief(act.el) };
+      const h = { action: act.tool, element: brief(act.el), id: act.target, url: page.url };
       if (act.tool === "select" && act.value != null) h.option = act.value;
       if (act.valueKey && ["type", "select", "upload"].includes(act.tool)) h.value = act.valueKey;
       if (act.key) h.key = act.key;
