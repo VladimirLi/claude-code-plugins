@@ -4,8 +4,8 @@
 // only this user can open. One session name = one tab; sessions run in parallel.
 import net from "node:net";
 import { mkdirSync, rmSync, chmodSync, appendFileSync, existsSync } from "node:fs";
-import { HOME, SOCKET, LOG } from "./paths.mjs";
-import { launchChrome } from "./cdp.mjs";
+import { HOME, SOCKET, LOG, ATTACH } from "./paths.mjs";
+import { launchChrome, attachUserChrome } from "./cdp.mjs";
 import { Browser } from "./tab.mjs";
 import { Agent } from "./agent.mjs";
 
@@ -20,13 +20,13 @@ async function getBrowser() {
   if (browser?.alive) return browser;
   starting ??= (async () => {
     const t0 = Date.now();
-    const { cdp, proc: p } = await launchChrome();
+    const { cdp, proc: p } = ATTACH ? await attachUserChrome() : await launchChrome();
     proc = p;
-    const b = new Browser(cdp, p);
+    const b = new Browser(cdp, p, { user: ATTACH });
     await b.init();
     agents.clear();
     browser = b;
-    log(`chrome ready in ${Date.now() - t0} ms (${p ? "launched" : "attached"})`);
+    log(`chrome ready in ${Date.now() - t0} ms (${ATTACH ? "your Chrome" : p ? "launched" : "attached"})`);
     return b;
   })().finally(() => { starting = null; });
   return starting;
@@ -74,7 +74,9 @@ async function handle(req) {
 async function quit(code) {
   try { server.close(); } catch {}
   try { rmSync(SOCKET, { force: true }); } catch {}
-  try { await Promise.race([browser?.cdp.send("Browser.close"), new Promise((r) => setTimeout(r, 3000))]); } catch {}
+  // The user's own Chrome is never closed: only the tabs this daemon opened.
+  const closing = ATTACH ? Promise.all([...(browser?.tabs.keys() ?? [])].map((n) => browser.close(n))) : browser?.cdp.send("Browser.close");
+  try { await Promise.race([closing, new Promise((r) => setTimeout(r, 3000))]); } catch {}
   try { browser?.cdp.close(); } catch {}
   if (proc && proc.exitCode == null) try { proc.kill(); } catch {}
   process.exit(code);
@@ -107,4 +109,5 @@ process.on("SIGTERM", () => quit(0));
 process.on("SIGINT", () => quit(0));
 process.on("unhandledRejection", (e) => log(`unhandled: ${String(e?.message ?? e).slice(0, 200)}`));
 touch();
-getBrowser().catch((e) => log(`chrome start failed: ${e.message}`));   // warm at start, not at first open
+// warm at start, not at first open (your own Chrome is attached on first use: that may show Allow)
+if (!ATTACH) getBrowser().catch((e) => log(`chrome start failed: ${e.message}`));

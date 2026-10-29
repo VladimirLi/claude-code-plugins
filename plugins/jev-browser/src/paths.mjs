@@ -8,11 +8,16 @@ import { fileURLToPath } from "node:url";
 
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const HOME = process.env.JEVB_HOME || join(homedir(), ".claude", "plugins", "data", "jev-browser-vladimirli-plugins");
-export const SOCKET = join(HOME, "daemon.sock");
 export const PROFILE = join(HOME, "chrome-profile");
 export const LOG = join(HOME, "daemon.log");
 export const SHOTS = join(HOME, "shots");
 export const CHROME = process.env.JEVB_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+// Attach mode: drive the user's own running Chrome (its tabs, logins and extensions) instead of
+// launching the dedicated one. Needs chrome://inspect/#remote-debugging switched on there.
+export const ATTACH = /^(1|true)$/i.test(process.env.JEVB_ATTACH || "");
+export const USER_CHROME = process.env.JEVB_USER_DATA_DIR || join(homedir(), "Library", "Application Support", "Google", "Chrome");
+// One daemon per mode, so the dedicated Chrome and your own Chrome never share a socket.
+export const SOCKET = join(HOME, ATTACH ? "daemon-attach.sock" : "daemon.sock");
 
 // Jev is served by TypeSafe and by OpenRouter (same request). A key is only ever sent to the
 // host of the provider it belongs to.

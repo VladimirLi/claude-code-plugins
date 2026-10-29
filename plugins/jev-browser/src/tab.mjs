@@ -18,8 +18,10 @@ const KEYS = {
 export const KEY_NAMES = Object.keys(KEYS);
 
 export class Browser {
-  constructor(cdp, proc) {
-    this.cdp = cdp; this.proc = proc; this.tabs = new Map(); this.byTarget = new Map(); this.bySession = new Map();
+  // user: this is the user's own Chrome (attach mode): pages keep their real window size,
+  // language and user agent, and only tabs this daemon opened are ever touched or closed.
+  constructor(cdp, proc, { user = false } = {}) {
+    this.cdp = cdp; this.proc = proc; this.user = user; this.tabs = new Map(); this.byTarget = new Map(); this.bySession = new Map();
     cdp.on((method, params, sessionId) => {
       if (sessionId) return this.bySession.get(sessionId)?.event(method, params);
       if (method === "Target.targetCreated" && params.targetInfo.type === "page" && params.targetInfo.openerId) {
@@ -93,8 +95,10 @@ export class Tab {
       s("Page.addScriptToEvaluateOnNewDocument", { source: MUTATION_WATCH }),
       s("Page.addScriptToEvaluateOnNewDocument", { source: SUBMIT_GUARD }),
       s("Emulation.setFocusEmulationEnabled", { enabled: true }),
-      s("Emulation.setDeviceMetricsOverride", { ...VIEWPORT, deviceScaleFactor: 1, mobile: false }),
-      s("Network.setUserAgentOverride", { userAgent: this.b.ua, acceptLanguage: "en-US,en" }),
+      ...(this.b.user ? [] : [
+        s("Emulation.setDeviceMetricsOverride", { ...VIEWPORT, deviceScaleFactor: 1, mobile: false }),
+        s("Network.setUserAgentOverride", { userAgent: this.b.ua, acceptLanguage: "en-US,en" }),
+      ]),
       s("Runtime.runIfWaitingForDebugger"),
     ]);
     await this.eval(MUTATION_WATCH).catch(() => {});

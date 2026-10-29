@@ -17,6 +17,16 @@ No npm dependencies: Node 22.4+ (built-in WebSocket) and Google Chrome at `/Appl
 
 Then set the TypeSafe key in `/plugin` (jev-browser, Configure), or put `TYPESAFE_API_KEY=...` in `~/.claude/plugins/data/jev-browser-vladimirli-plugins/.env`. A daemon started by the CLI reads that file and its environment (in a development checkout, also the repository's root `.env`). The key is sent only to `api.typesafe.ai` (or an OpenRouter key only to `openrouter.ai`), and is never logged.
 
+## Use your own Chrome
+
+By default the plugin runs its own headless Chrome with a separate profile. To have it work in your everyday Chrome instead, with your tabs, logins and extensions, like Claude in Chrome:
+
+1. In Chrome, open `chrome://inspect/#remote-debugging` and switch on "Allow remote debugging for this browser instance".
+2. Turn on "Use my own Chrome" in `/plugin` (jev-browser, Configure), or set `JEVB_ATTACH=1` for the CLI (`JEVB_ATTACH=1 jevb --session me open https://example.com`).
+3. On the first connection Chrome asks you to Allow it. Click Allow.
+
+Each session opens its own window in your Chrome. Pages keep your real window size, language and user agent. `close` and `stop` close only the tabs the plugin opened, never Chrome itself. This mode has its own daemon (`daemon-attach.sock`), so it never mixes with the separate Chrome. Every site you are logged in to is reachable in this mode; the irreversible-action gate still applies.
+
 ## CLI
 
 ```

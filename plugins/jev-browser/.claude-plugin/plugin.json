@@ -30,6 +30,12 @@
       "sensitive": true,
       "default": ""
     },
+    "use_my_chrome": {
+      "type": "boolean",
+      "title": "Use my own Chrome",
+      "description": "Drive your everyday Chrome (your tabs, logins and extensions) like Claude in Chrome, instead of the plugin's separate one. Needs chrome://inspect/#remote-debugging switched on in your Chrome; Chrome asks you to Allow the first connection.",
+      "default": false
+    },
     "headed": {
       "type": "boolean",
       "title": "Show the browser",
@@ -44,7 +50,8 @@
       "env": {
         "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
         "OPENROUTER_API_KEY": "${user_config.openrouter_api_key}",
-        "JEVB_HEADED": "${user_config.headed}"
+        "JEVB_HEADED": "${user_config.headed}",
+        "JEVB_ATTACH": "${user_config.use_my_chrome}"
       }
     }
   }

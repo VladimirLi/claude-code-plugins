@@ -3,7 +3,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { CHROME, PROFILE } from "./paths.mjs";
+import net from "node:net";
+import { CHROME, PROFILE, USER_CHROME } from "./paths.mjs";
 
 const SLOW = Number(process.env.JEVB_DEBUG_SLOW) || 0;
 const SLOW_LOG = (s) => process.stderr.write(`[slow] ${s}\n`);
@@ -48,6 +49,24 @@ export class CDP {
 
   on(fn) { this.handlers.add(fn); return () => this.handlers.delete(fn); }
   close() { try { this.ws.close(); } catch {} }
+}
+
+// Attach to the user's own running Chrome. Chrome writes DevToolsActivePort into its profile dir
+// once "Allow remote debugging" is on at chrome://inspect/#remote-debugging, and asks the user to
+// Allow each new connection (Chrome 144+), so the open waits without a deadline of its own.
+export async function attachUserChrome() {
+  const portFile = join(USER_CHROME, "DevToolsActivePort");
+  const how = "In your Chrome open chrome://inspect/#remote-debugging and switch on \"Allow remote debugging for this browser instance\"";
+  if (!existsSync(portFile)) throw new Error(`Your Chrome does not allow remote debugging. ${how}.`);
+  const [port, path] = readFileSync(portFile, "utf8").split("\n").map((s) => s.trim());
+  const live = await new Promise((res) => { const c = net.connect(Number(port), "127.0.0.1", () => { c.end(); res(true); }); c.on("error", () => res(false)); });
+  if (!live) throw new Error(`Your Chrome is not running with remote debugging on. Start Chrome; if this repeats: ${how}.`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+  await new Promise((res, rej) => {
+    ws.addEventListener("open", res, { once: true });
+    ws.addEventListener("error", () => rej(new Error("Chrome refused the connection (was Allow clicked in Chrome's prompt?)")), { once: true });
+  });
+  return { cdp: new CDP(ws), proc: null };
 }
 
 // Launch Chrome with our own profile (never the user's), or reuse one already running on it.
