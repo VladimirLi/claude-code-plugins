@@ -1,0 +1,110 @@
+#!/usr/bin/env node
+// jevb: the CLI face of the jev-browser daemon (same operations as the MCP tools).
+// Run with no arguments for usage.
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { Client } from "../src/client.mjs";
+import { SHOTS } from "../src/paths.mjs";
+
+const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SESSION or "default"; one tab per session)
+
+  open <url>                                   load a page; prints the element table
+  do <goal> [--values JSON] [--max N] [--allow-irreversible] [--vision]
+                                               let Jev reach one observable outcome; values are typed by key
+  act <op> [id] [value]                        one action: click|dblclick|right_click|hover|check|uncheck|type|clear|
+                                               select|press_enter|press_key|upload|drag|scroll|wait|back|navigate
+        e.g. act click 12 · act type 7 "hello" · act select 5 "Option 2" · act press_key Escape
+             act drag 3 9 · act scroll down · act navigate https://example.com
+  act '<JSON list>' [--values JSON] [--allow-irreversible]
+        e.g. act '[{"op":"type","id":7,"value_key":"user"},{"op":"click","id":9}]' --values '{"user":"ada"}'
+  observe [full|diff|find <text>|read|screenshot]
+  check <yes/no question> [--vision]           Jev's probability that the answer is yes
+  eval <js function or expression>             bench only: runs JS in the session's tab, prints JSON
+  close                                        close this session's tab
+  sessions | status | stop                     list sessions · daemon status · stop daemon and Chrome
+  --fresh                                      when this call creates the session: give it its own empty
+                                               browser context (no profile cookies/storage; gone on close)
+  --json                                       print the raw result object`;
+
+const argv = process.argv.slice(2);
+const flags = {}; const pos = [];
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--session" || a === "-s") flags.session = argv[++i];
+  else if (a === "--values") flags.values = argv[++i];
+  else if (a === "--values-file") flags.values = readFileSync(argv[++i], "utf8");
+  else if (a === "--max") flags.max = Number(argv[++i]);
+  else if (a === "--allow-irreversible") flags.allow = true;
+  else if (a === "--vision") flags.vision = true;
+  else if (a === "--json") flags.json = true;
+  else if (a === "--fresh") flags.fresh = true;
+  else if (a === "-h" || a === "--help") { console.log(USAGE); process.exit(0); }
+  else pos.push(a);
+}
+const [cmd, ...rest] = pos;
+if (!cmd) { console.log(USAGE); process.exit(0); }
+const session = flags.session || process.env.JEVB_SESSION || "default";
+
+function values() {
+  if (!flags.values) return {};
+  let v;
+  try { v = JSON.parse(flags.values); } catch { fail("--values must be a JSON object"); }
+  // file paths for uploads are resolved against this shell's directory
+  for (const [k, x] of Object.entries(v)) if (/file|path|upload/i.test(k) && typeof x === "string" && !x.startsWith("/") && existsSync(resolve(x))) v[k] = resolve(x);
+  return v;
+}
+function fail(msg) { console.error(`jevb: ${msg}`); process.exit(2); }
+
+function parseAct() {
+  const first = rest[0];
+  if (!first) fail("act needs an op");
+  if (first.trim().startsWith("[") || first.trim().startsWith("{")) {
+    let list; try { list = JSON.parse(first); } catch { fail("act JSON is not valid"); }
+    return Array.isArray(list) ? list : [list];
+  }
+  const [op, a, b] = rest;
+  const num = (x) => (x != null && /^\d+$/.test(x) ? Number(x) : undefined);
+  switch (op) {
+    case "scroll": return [{ op, ...(num(a) != null ? { id: num(a), direction: b || "down" } : { direction: a || "down" }) }];
+    case "press_key": return [num(a) != null ? { op, id: num(a), key: b } : { op, key: a }];
+    case "press_enter": return [{ op, ...(num(a) != null ? { id: num(a) } : {}) }];
+    case "drag": return [{ op, id: num(a), to: num(b) }];
+    case "wait": return [{ op, value: a }];
+    case "back": return [{ op }];
+    case "navigate": return [{ op, value: a }];
+    case "upload": return [{ op, id: num(a), value: b && !b.startsWith("/") ? resolve(b) : b }];
+    default: return [{ op, id: num(a), ...(b !== undefined ? { value: b } : {}) }];
+  }
+}
+
+const client = new Client();
+let op = cmd, args = {};
+switch (cmd) {
+  case "open": if (!rest[0]) fail("open needs a url"); args = { url: rest[0] }; break;
+  case "do": if (!rest.length) fail("do needs a goal"); args = { goal: rest.join(" "), values: values(), max_actions: flags.max, allow_irreversible: !!flags.allow, vision: !!flags.vision }; break;
+  case "act": args = { actions: parseAct(), values: values(), allow_irreversible: !!flags.allow }; break;
+  case "observe": args = { mode: rest[0] || "full", query: rest.slice(1).join(" ") || undefined }; break;
+  case "check": if (!rest.length) fail("check needs a question"); args = { question: rest.join(" "), vision: !!flags.vision }; break;
+  case "eval": if (!rest.length) fail("eval needs JS"); args = { js: rest.join(" ") }; break;
+  case "close": case "sessions": break;
+  case "status": op = "ping"; break;
+  case "stop": op = "shutdown"; break;
+  default: console.error(USAGE); process.exit(2);
+}
+
+try {
+  const r = await client.call(op, session, { ...args, ...(flags.fresh ? { fresh: true } : {}) });
+  if (r.image) {
+    mkdirSync(SHOTS, { recursive: true });
+    const f = join(SHOTS, `${session}-${Date.now()}.jpg`);
+    writeFileSync(f, Buffer.from(r.image, "base64"));
+    r.text += `\nsaved: ${f}`; delete r.image;
+  }
+  console.log(flags.json ? JSON.stringify(r) : r.text);
+  client.close();
+  process.exit(0);
+} catch (e) {
+  client.close();
+  console.error(`jevb: ${e.message}`);
+  process.exit(1);
+}

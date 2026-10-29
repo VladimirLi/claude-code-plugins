@@ -1,0 +1,51 @@
+{
+  "name": "jev-browser",
+  "description": "Fast browser tools for Claude: raw CDP to a warm, dedicated Chrome, and Jev (TypeSafe's decision model) picking each click and keystroke. MCP tools open, do, act, observe, check, and the jevb CLI with per-driver sessions",
+  "author": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
+  "homepage": "https://github.com/VladimirLi/claude-code-plugins/tree/main/plugins/jev-browser",
+  "repository": "https://github.com/VladimirLi/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "automation",
+    "cdp",
+    "jev",
+    "mcp"
+  ],
+  "userConfig": {
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "Key for Jev (TypeSafe System One). Sent only to api.typesafe.ai. Empty: the daemon reads TYPESAFE_API_KEY from ~/.claude/plugins/data/jev-browser-vladimirli-plugins/.env.",
+      "sensitive": true,
+      "default": ""
+    },
+    "openrouter_api_key": {
+      "type": "string",
+      "title": "OpenRouter API key",
+      "description": "Use Jev through OpenRouter instead (sent only to openrouter.ai). Used when no TypeSafe key is set.",
+      "sensitive": true,
+      "default": ""
+    },
+    "headed": {
+      "type": "boolean",
+      "title": "Show the browser",
+      "description": "Run the dedicated Chrome with visible windows (to log in by hand). Takes effect when the daemon next starts (jevb stop).",
+      "default": false
+    }
+  },
+  "mcpServers": {
+    "jev-browser": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/mcp.mjs"],
+      "env": {
+        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
+        "OPENROUTER_API_KEY": "${user_config.openrouter_api_key}",
+        "JEVB_HEADED": "${user_config.headed}"
+      }
+    }
+  }
+}

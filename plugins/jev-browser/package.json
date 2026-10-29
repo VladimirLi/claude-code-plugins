@@ -1,0 +1,11 @@
+{
+  "name": "jev-browser",
+  "private": true,
+  "type": "module",
+  "description": "Fast browser agent for Claude: raw CDP to a warm dedicated Chrome, Jev for per-step decisions. MCP server and jevb CLI.",
+  "license": "MIT",
+  "engines": { "node": ">=22.4" },
+  "bin": { "jevb": "bin/jevb" },
+  "scripts": { "test": "node --test tests/*.test.mjs" },
+  "dependencies": {}
+}

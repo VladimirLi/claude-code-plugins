@@ -56,6 +56,19 @@
         "keep warm",
         "mod"
       ]
+    },
+    {
+      "name": "jev-browser",
+      "source": "./plugins/jev-browser",
+      "description": "Fast browser tools: a warm dedicated Chrome over raw CDP, Jev picks each step; MCP tools and the jevb CLI",
+      "category": "productivity",
+      "keywords": [
+        "browser",
+        "automation",
+        "cdp",
+        "jev",
+        "mcp"
+      ]
     }
   ]
 }
