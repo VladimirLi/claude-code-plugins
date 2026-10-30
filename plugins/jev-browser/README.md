@@ -27,6 +27,20 @@ By default the plugin runs its own headless Chrome with a separate profile. To h
 
 Each session opens its own window in your Chrome. Pages keep your real window size, language and user agent. `close` and `stop` close only the tabs the plugin opened, never Chrome itself. This mode has its own daemon (`daemon-attach.sock`), so it never mixes with the separate Chrome. Every site you are logged in to is reachable in this mode; the irreversible-action gate still applies.
 
+## Use the Chrome extension
+
+The extension front end works like Claude in Chrome: the plugin's extension drives tabs in your Chrome with `chrome.debugger` (the same CDP protocol, attached per tab). It needs no remote-debugging port and no chrome://inspect switch. The extension connects to the daemon by a WebSocket on `127.0.0.1`. Off by default; with it off, nothing below runs.
+
+1. In Chrome, open `chrome://extensions`, switch on Developer mode, click "Load unpacked" and choose the plugin's `extension/` folder (`~/.claude/plugins/.../jev-browser/extension`). Its id is always `dpehlmjpcfhpahnjfjldooeincglhojn` (fixed by the manifest key).
+2. Run `jevb pair` (with `JEVB_EXT=1`) and paste the code it prints (`jevb:47652:...`) into the extension's popup (its toolbar icon). You do this once; the extension keeps the code.
+3. Turn on "Use the Chrome extension" in `/plugin` (jev-browser, Configure), or set `JEVB_EXT=1` for the CLI. Then `jevb stop`, so the daemon starts again in this mode.
+
+While a tab is driven, Chrome shows the yellow "jev-browser started debugging this browser" bar. This is expected; "Cancel" there detaches the tab. Each session opens its own window. The extension drives only tabs the daemon opened and the pop-ups they open, never your other tabs. `close` and `stop` close only those tabs. A `--fresh` session opens its own incognito window, in your Chrome and in the test Chrome alike; it needs the extension allowed in incognito (Details, "Allow in Incognito"), and without that `--fresh` fails with an error instead of using your normal profile. While the daemon is connected, the extension keeps one blank, minimized incognito window open (the keeper). Chrome keeps its incognito profile alive while any incognito window is open, so each session's window joins that live profile: no new profile per session, and the HTTP cache stays warm from earlier sessions, so pages the daemon opened before load from cache. Cookies and storage do not carry over: when a fresh session closes, the extension clears the incognito cookies (`Network.clearBrowserCookies`) and all storage of every origin the session loaded (`Storage.clearDataForOrigin`, storage types "all"), through chrome.debugger on the keeper tab. If that clear was missed, the next fresh session does it before it opens. Your normal profile is never cleared. Two fresh sessions open at once share the incognito profile, and the extension never clears while you have incognito tabs of your own open (that would log you out there); in both cases the daemon log says the fresh session shares cookies and storage. The keeper closes when the daemon stops or disconnects. Uploads work without "Allow access to file URLs": the daemon reads the file and gives it to the page.
+
+The connection is locked down. The server listens only on `127.0.0.1` (`JEVB_EXT_PORT`, default 47652). It accepts only the Origin `chrome-extension://dpehlmjpcfhpahnjfjldooeincglhojn` with the pairing token. The token is random and kept in `ext-pairing.json` (mode 0600). The Host must be `127.0.0.1` or `localhost`. Every other client is refused and logged. A second connection from the extension (its service worker restarting) replaces the first. This mode has its own daemon (`daemon-ext.sock`).
+
+For tests and benchmarks, `JEVB_EXT=1 JEVB_EXT_TEST=1` uses no Chrome of yours. The daemon launches a dedicated headless Chrome with a new profile (`ext-test-profile/` under `JEVB_HOME`). This Chrome loads a copy of the unpacked extension that carries a one-time pairing. Branded Chrome ignores `--load-extension` (since 137), so the daemon installs the extension with the CDP method `Extensions.loadUnpacked` over `--remote-debugging-pipe` (with `--enable-unsafe-extension-debugging`). This is the only command sent on the pipe. Every later command goes daemon, WebSocket, extension, `chrome.debugger`. `daemon.log` proves it: each operation's line ends with `[extension N cmds, total M]`, and `jevb status` prints the transport and its command count.
+
 ## CLI
 
 ```
@@ -39,6 +53,7 @@ jevb [--session NAME] [--fresh] <command>
   check <yes/no question> [--vision]
   eval <js>                      bench only: run JS in the session's tab, print JSON
   close | sessions | status | stop
+  pair                           print the pairing code for the extension
 ```
 
 The first command starts the daemon, and the daemon starts Chrome. Both stay warm (the daemon exits after 8 idle hours, `JEVB_IDLE_HOURS`). `--fresh` on a session's first call gives it an empty browser context instead of the shared profile.
@@ -47,7 +62,7 @@ The first command starts the daemon, and the daemon starts Chrome. Both stay war
 
 | Part | What it does |
 | --- | --- |
-| Connection | One CDP WebSocket. Each session gets its own window, so its tab is active and renders at full rate (background tabs in headless Chrome barely tick `requestAnimationFrame`). Pop-ups opened by a tab become the session's tab. |
+| Connection | One CDP WebSocket (or, in extension mode, the extension's WebSocket to the daemon, relayed to `chrome.debugger`; `src/cdp.mjs` gives `tab.mjs` the same interface for both). Each session gets its own window, so its tab is active and renders at full rate (background tabs in headless Chrome barely tick `requestAnimationFrame`). Pop-ups opened by a tab become the session's tab. |
 | Observer | One injected script per call: interactive elements through open shadow roots and same-origin iframes, labels, state, nearby text, a covered flag from a hit test, visible text, and a summary of visible tables (headers marked with their sort order, so Jev can see that a column is sorted). |
 | Ids | Sticky: an element keeps its id while its role and name stay the same. Ids are never reused within a session, so an id from a page that navigated away fails as "gone". |
 | Executor | Re-resolves the id, scrolls it into view, runs a hit test, then sends CDP `Input` events at fresh coordinates (a link that wraps onto two lines is aimed at its largest line box). Short text is typed as key events (date pickers and masks listen to keys). Mutations are never retried. |
@@ -73,4 +88,4 @@ When the goal names something the page does not show yet, `do` watches for a pag
 
 ## Files
 
-`~/.claude/plugins/data/jev-browser-vladimirli-plugins/`: `daemon.sock`, `daemon.log` (operation names and timings only), `chrome-profile/`, `shots/`, and optionally `.env`. `JEVB_HOME` moves all of them.
+`~/.claude/plugins/data/jev-browser-vladimirli-plugins/`: `daemon.sock`, `daemon.log` (operation names and timings only), `chrome-profile/`, `shots/`, and optionally `.env`. In extension mode, also `daemon-ext.sock` and `ext-pairing.json`; in its test mode, `daemon-ext-test.sock`, `ext-test-profile/` and `ext-test/`. `JEVB_HOME` moves all of them.
