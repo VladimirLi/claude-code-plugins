@@ -480,6 +480,14 @@ class TestOrderings(FloorCase):
         self.assertEqual(sim.ends()["r1"], "interrupt")
         self.assertEqual(sim.ends()["r2"], "drained")
 
+    def test_o21_interrupter_and_newer_pending_segment_join_in_segment_order(self):
+        sim = Sim()
+        ask(sim)
+        sim.say(2, 2600, 3000, "stop show the errors", interims=[(2900, "stop")])    # final 3900
+        sim.say(3, 3300, 3500, "and the config", final_ms=900)                       # final 5000
+        sim.run()
+        self.assertEqual(sim.questions(), [Q1, "stop show the errors", "stop show the errors and the config"])
+
     def test_o22_reply_drains_before_an_over_heard_final_with_words(self):
         sim = Sim()
         ask(sim)
@@ -598,6 +606,129 @@ class TestRules(FloorCase):
         sim.detector(2900, "resume")
         sim.run()
         self.assertEqual([t for t, _ in sim.ops(F.Play)], [3400.0])
+
+
+# -- review findings and fuzzer finds ---------------------------------------------------------------
+
+class TestReviewFindings(FloorCase):
+    def test_brain_done_after_tts_done_and_drained_still_ends(self):
+        f = F.Floor()
+        f.on(F.SpeechStart(1, "u1", t_ms=0))
+        f.on(F.TurnEnd(1, 1000, t_ms=1600))
+        rid = [a for a in f.on(F.Final("u1", Q1, "spec", t_ms=1900)) if isinstance(a, F.StartReply)][0].rid
+        f.on(F.TtsPiece(rid, "p0", "content", "Done.", 500, t_ms=2000))
+        f.on(F.Played(rid, "p0", 500, t_ms=2500))
+        f.on(F.TtsDone(rid, t_ms=2500))
+        f.on(F.Drained(rid, t_ms=2510))
+        f.on(F.BrainDone(rid, t_ms=2600))
+        self.assertIsNone(f.reply)
+
+    def test_reply_with_no_pieces_ends_without_drained(self):
+        sim = Sim(plans={Q1: Plan(pieces=[]), "": Plan()})
+        ask(sim)
+        sim.at(2500, F.TaskResult("t1", "Task 1 finished."))
+        sim.run()
+        self.assertEqual([a.kind for a in sim.starts()], ["answer", "announce"])
+
+    def test_interim_pause_does_not_make_a_segment_over_heard(self):
+        plan = Plan(pieces=[("I am looking.", 800), ("Found it.", 800)], gap_ms=8000, done_ms=9000)
+        sim = Sim(plans={Q1: plan, "": Plan()})
+        ask(sim)                                               # content 2220-3020, then silence
+        sim.say(2, 5000, 5400, "yeah", interims=[(5300, "yeah")])
+        sim.run()
+        self.assertEqual(sim.questions(), [Q1, "yeah"])        # words in silence, not a backchannel
+
+    def test_interrupted_label_keeps_its_own_turn_end(self):
+        sim = Sim({"keepalive_after_ms": 500}, plans={Q1: Plan(first_ms=6000), "": Plan()})
+        ask(sim)                                               # turn_end 1600
+        sim.say(2, 2800, 3300, "in the repo")                  # turn_end 3900, interrupts
+        sim.run()
+        ted = {e.label: e.fields["t_ms"] for _, e in sim.emits("turn_end_detected")}
+        self.assertEqual(ted, {"1": 1600.0, "2": 3900.0})
+
+    def test_interim_words_in_a_hold_tentative_are_no_barge_in(self):
+        sim = Sim(plans=Plan(first_ms=4000))                   # nothing to play until 5900
+        ask(sim)
+        sim.say(2, 2000, 4200, "and the config", interims=[(2800, ""), (3900, "and the")])
+        sim.run()
+        self.assertEqual(sim.emits("barge_in_detected"), [])
+        self.assertEqual(sim.emits("playback_paused"), [])
+
+    def test_join_restart_carries_announcements_without_a_try(self):
+        sim = Sim(plans=Plan(first_ms=2000))
+        sim.at(0, F.TaskResult("t1", "Task 1 finished."))
+        sim.say(1, 200, 1000, "What are you doing?")           # before the announcement starts
+        sim.say(2, 2600, 3200, "in the repo")
+        sim.run()
+        carries = [[c["tries"] for c in a.carries] for a in sim.starts()]
+        self.assertEqual(carries, [[0], [0]])
+
+    def test_detector_pause_counts_over_heard_without_content_in_window(self):
+        sim = Sim()
+        ask(sim)
+        sim.detector(2600)                                     # pauses; nothing plays after 2600
+        sim.say(2, 3300, 3600, "yeah", truth="")               # absorbs the blip 700 ms later
+        sim.run()
+        self.assertOneAnswer(sim)
+
+    def test_new_speech_lifts_the_resume_guard(self):
+        sim = Sim(plans=LONG)
+        ask(sim)
+        sim.detector(2500)                                     # no-words pause, resumes 3300
+        sim.say(2, 3500, 3900, "")
+        sim.detector(3700)                                     # speech since the resume: pause
+        sim.run()
+        self.assertIn(3700.0, [t for t, _ in sim.ops(F.Pause)])
+
+    def test_play_after_a_hold_restarts_the_keepalive_timer(self):
+        sim = Sim(plans=Plan(pieces=[("Found it.", 1000)], first_ms=12000))
+        ask(sim)
+        sim.say(2, 3000, 3200, "", turn_end_ms=3500, final_ms=500)   # hold, '' and play at 4000
+        sim.run()
+        self.assertEqual([t for t, _ in sim.ops(F.Keepalive)][0], 4000.0 + 4500)
+
+    def test_blip_in_the_set_waits_even_past_a_short_cap(self):
+        sim = Sim({"pause_max_ms": 500})
+        ask(sim)
+        sim.say(2, 2000, 2050, "", turn_end_ms=2100, final_ms=3000)   # quiet at 2100
+        sim.detector(2150)                                     # blip in the set until 2950
+        sim.run()
+        self.assertEqual([t for t, _ in sim.ops(F.Play)][0], 2950.0)
+
+    def test_rewind_counts_from_the_last_stop_after_a_tentative_play(self):
+        sim = Sim(plans=LONG)
+        ask(sim)
+        sim.detector(2600)                                     # 380 ms into piece 1
+        sim.say(2, 2640, 2800, "", interims=[(3200, "")], turn_end_ms=3400, final_ms=2600)
+        sim.detector(4400)                                     # stops the tentative play
+        sim.run()
+        self.assertEqual([a.rewind_ms for _, a in sim.ops(F.Play)], [380.0, 0.0])
+
+    def test_keepalive_playing_at_a_hold_is_dropped(self):
+        sim = Sim({"keepalive_after_ms": 500}, plans={Q1: Plan(first_ms=6000), "": Plan()})
+        ask(sim)                                               # keepalive 2400, plays from 2620
+        sim.say(2, 2900, 3000, "", turn_end_ms=3300, final_ms=200)   # hold 2900-3500
+        sim.run()
+        self.assertEqual([t for t, e in sim.events if isinstance(e, F.Played) and e.piece == "k1" and t > 2900], [])
+
+    def test_played_while_paused_is_ignored(self):
+        f = F.Floor()
+        f.on(F.SpeechStart(1, "u1", t_ms=0))
+        f.on(F.TurnEnd(1, 1000, t_ms=1600))
+        rid = [a for a in f.on(F.Final("u1", Q1, "spec", t_ms=1900)) if isinstance(a, F.StartReply)][0].rid
+        f.on(F.TtsPiece(rid, "p0", "content", "The logs show no errors.", 1500, t_ms=2000))
+        f.on(F.Played(rid, "p0", 300, t_ms=2300))
+        f.on(F.Detector("barge_in", "open", t_ms=2310))
+        f.on(F.Played(rid, "p0", 600, t_ms=2600))               # a late report after the pause
+        self.assertEqual(f.reply.offset, ("p0", 300.0))
+
+    def test_backchannel_final_after_partial_interim_is_no_dropout(self):
+        # fuzz seed 1076: interim "got" had words, final "got it" over content is a backchannel
+        sim = Sim()
+        ask(sim)
+        sim.say(2, 2600, 3000, "got it", interims=[(2900, "got")], truth="")
+        sim.run()
+        self.assertOneAnswer(sim)
 
 
 # -- rewind, words, labels -------------------------------------------------------------------------

@@ -236,6 +236,14 @@ class Play:
 
 
 @dataclass
+class Drop:
+    """Drop a keepalive piece from the gate: rule 8 never buffers one across a pause."""
+    rid: str
+    piece: str
+    op: ClassVar[str] = "drop"
+
+
+@dataclass
 class Duck:
     rid: str
     op: ClassVar[str] = "duck"
@@ -359,19 +367,17 @@ class Reply:
     pause_on: set = field(default_factory=set)
     cause: Optional[str] = None  # hold | barge_in, from the first entry into the pause set
     since_ms: Optional[float] = None
-    episode_words: bool = False  # a member of this pause episode resolved with words
-    episode_paused: bool = False  # this episode stopped heard audio (playback_paused)
+    episode_paused: bool = False  # this pause episode stopped heard audio (playback_paused)
     ducked_on: set = field(default_factory=set)
     detector_ducked: bool = False
     resumed_ms: Optional[float] = None
     speech_since_resume: bool = False
     nowords_pauses: int = 0
     offset: Optional[tuple] = None
-    has_audio: bool = False      # pieces reached the gate since the last drained
+    drained: bool = True         # nothing queued or buffered at the gate
     ka_heard: bool = False       # a keepalive played with the gate open
     sound_ms: float = 0.0        # last play or content audio, for the keepalive timer
     ka_sent_ms: Optional[float] = None
-    paused_by: list = field(default_factory=list)   # utt ids ("" for a blip), for the end log
 
 
 class Floor:
@@ -387,7 +393,7 @@ class Floor:
         self.utt = Utterance()
         self.reply: Optional[Reply] = None
         self.last_context: Optional[Interrupted] = None
-        self.last_reply: Optional[Interrupted] = None   # spoken and question of the last ended reply
+        self.last_heard: Optional[Interrupted] = None   # what the last ended answer played
         self.played: list = []
         self.announcements: list = []
         self.timers: dict = {}
@@ -459,15 +465,16 @@ class Floor:
         r = self.reply
         if r is None:
             return
+        cause = "barge_in" if r.heard == "content" else "hold"
         if seg.g in r.pause_on:
             if r.gate == "tentative":
-                self._close_gate("barge_in", "interim_words")   # rule 4: words pause again at once
+                self._close_gate(cause, "interim_words")   # rule 4: words pause again at once
             return
         # Rule 2, both modes: interim words pause at once; the guard and the limit never block it.
-        cause = "barge_in" if r.heard == "content" else "hold"
+        # It pauses even when the segment is not over heard content (I5), and does not set
+        # `caused`, so it never changes whether the segment is over heard.
         self._hold_on(seg, cause, "interim_words", stop_tentative=True)
         if cause == "barge_in":
-            seg.caused = "pause"
             self._emit("x_bargein", r.label, reason="interim", text=ev.text)
 
     def _on_TurnEnd(self, ev: TurnEnd) -> None:
@@ -490,8 +497,10 @@ class Floor:
             seg.over_heard = self._over_heard(seg, self.now)
         seg.status = "final"
         words = self._words(seg, ev.text, seg.over_heard)
-        if not words and seg.interim_words:
-            # Rule 3: an STT dropout. Read before the no-words test, or it could never apply.
+        dropout = not self.meaningful(ev.text, self._window(seg), earlier_words=seg.interim_words)
+        if dropout and seg.interim_words:
+            # Rule 3: an STT dropout (the final has no words at all, not a backchannel). Read
+            # before the no-words test, or it could never apply.
             words = self._words(seg, seg.last_interim, seg.over_heard)
         if not words:
             self._no_words(seg, "final_no_words")
@@ -543,6 +552,7 @@ class Floor:
         r = self._current(ev.rid)
         if r is not None:
             r.brain = "done"
+            self._maybe_end(r)
 
     def _on_BrainError(self, ev: BrainError) -> None:
         r = self._current(ev.rid)
@@ -552,20 +562,23 @@ class Floor:
         if r.heard == "content":                    # rule 9
             self.last_context = Interrupted(self._spoken(r), r.question)
         self._end_reply("error")
+        self._close_utterance()
 
     def _on_TtsPiece(self, ev: TtsPiece) -> None:
         r = self._current(ev.rid)
         if r is None:
             return
         if ev.kind == "keepalive" and r.gate == "paused":
-            return                                  # rule 8: dropped, not buffered
+            self.out.append(Drop(r.rid, ev.piece))  # rule 8: dropped, not buffered
+            return
         r.pieces[ev.piece] = Piece(ev.kind, ev.text, float(ev.dur_ms))
-        r.has_audio = True
+        r.drained = False
 
     def _on_TtsDone(self, ev: TtsDone) -> None:
         r = self._current(ev.rid)
         if r is not None:
             r.tts = "done"
+            self._maybe_end(r)
 
     def _on_Played(self, ev: Played) -> None:
         r = self._current(ev.rid)
@@ -595,9 +608,14 @@ class Floor:
         r = self._current(ev.rid)
         if r is None:
             return
-        r.has_audio = False
-        if r.brain == "done" and r.tts == "done":
+        r.drained = True
+        self._maybe_end(r)
+
+    def _maybe_end(self, r: Reply) -> None:
+        """A reply ends when the brain and TTS are done and the gate has nothing left, in any order."""
+        if r.brain == "done" and r.tts == "done" and r.drained:
             self._end_reply("drained", stop=False)
+            self._close_utterance()
 
     def _on_TaskResult(self, ev: TaskResult) -> None:
         self.announce_counter += 1
@@ -622,6 +640,7 @@ class Floor:
     def _on_End(self, ev: End) -> None:
         if self.reply is not None:
             self._end_reply("end")
+            self._close_utterance()
         for name in list(self.timers):
             self._cancel_timer(name)
         if self.floor_on:
@@ -671,9 +690,6 @@ class Floor:
             if blip.g in s:
                 s.discard(blip.g)
                 s.add(seg.g)
-        if "" in r.paused_by:
-            r.paused_by.remove("")
-            r.paused_by.append(seg.utt_id)
 
     def _window(self, seg: Seg) -> list:
         start = seg.start_ms - self.cfg["echo_lead_ms"]
@@ -711,10 +727,8 @@ class Floor:
         if seg.g in r.pause_on:
             return
         if not r.pause_on:
-            r.cause, r.since_ms = cause, self.now
-            r.episode_words = r.episode_paused = False
+            r.cause, r.since_ms, r.episode_paused = cause, self.now, False
         r.pause_on.add(seg.g)
-        r.paused_by.append(seg.utt_id or "")
         if r.gate == "open" or (r.gate == "tentative" and stop_tentative):
             self._close_gate(cause, reason, g=seg.g)
         else:
@@ -722,19 +736,24 @@ class Floor:
 
     def _close_gate(self, trigger: str, reason: str, g: Optional[int] = None) -> None:
         r = self.reply
-        audible = r.gate == "tentative" or r.has_audio
+        if r.gate == "tentative":
+            r.since_ms = self.now                   # audio stops again now: the rewind counts from here
         r.gate = "paused"
         self.out.append(Pause(r.rid))
+        for name, p in r.pieces.items():
+            if p.kind == "keepalive" and p.played_ms < p.dur_ms:
+                p.dur_ms = p.played_ms              # rule 8: a paused keepalive is dropped
+                self.out.append(Drop(r.rid, name))
         self._floor("pause", reason, g=g, trigger=trigger)
-        if trigger == "barge_in" and audible:
+        if trigger == "barge_in" and r.heard == "content":
             r.episode_paused = True
             self._emit("barge_in_detected", r.label, reason=reason)
             self._emit("playback_paused", r.label, reason=reason)
 
     def _quiet(self, seg: Seg) -> bool:
-        """Rule 4: an interim with no words, or a turn_end with no interim words. Blips wait out
-        short_bargein_ms instead (they leave the set then)."""
-        if seg.kind == "blip" or seg.interim_words:
+        """Rule 4: an interim with no words, or a turn_end with no interim words. A blip has
+        neither, so it waits out short_bargein_ms and leaves the set."""
+        if seg.interim_words:
             return False
         return seg.interim_seen_ms is not None or seg.status != "open"
 
@@ -763,7 +782,9 @@ class Floor:
     def _free_gate(self, r: Reply) -> None:
         """The pause set emptied: open the gate, and count a pause that ended with no words."""
         was = r.gate
-        if r.episode_paused and not r.episode_words:
+        # A member that resolved with words always ended the reply (join changes the question,
+        # or interrupt), so an episode still open here ended with no words.
+        if r.episode_paused:
             r.nowords_pauses += 1
             r.resumed_ms = self.now
             r.speech_since_resume = False
@@ -804,7 +825,6 @@ class Floor:
         u = self.utt
         if seg.g not in u.segs:
             u.segs.append(seg.g)
-        u.segs.sort()
         newest = max(g for g in u.segs if self.segs[g].status == "final" and self.segs[g].text)
         u.last_word_end_ms = self.segs[newest].speech_end_ms
         if u.label is None:
@@ -812,8 +832,6 @@ class Floor:
             u.label = self._new_label(first.hint)
         r = self.reply
         if r is not None:
-            if seg.g in r.pause_on:
-                r.episode_words = True
             r.pause_on.discard(seg.g)
             r.ducked_on.discard(seg.g)
         self._floor("join", reason, g=seg.g, label=u.label)
@@ -830,16 +848,14 @@ class Floor:
 
     def _interrupt(self, seg: Seg) -> None:
         r = self.reply
+        if seg.g in self.utt.segs:
+            self.utt.segs.remove(seg.g)             # g starts the next utterance, not this one
         if r is not None:
             self.last_context = Interrupted(self._spoken(r), r.question)
-            if seg.g in r.pause_on:
-                r.episode_words = True
             self._end_reply("interrupt")
-        else:
-            if self.last_context is None and self.last_reply is not None:
-                # Over heard content of a reply that already ended (ordering 22).
-                self.last_context = self.last_reply
-            self._close_utterance()
+        elif self.last_context is None and self.last_heard is not None:
+            self.last_context = self.last_heard     # over heard content of an ended reply (ordering 22)
+        self._close_utterance()
         self._floor("interrupt", "words", g=seg.g, label=None)
         self._join(seg, "interrupt")
 
@@ -884,18 +900,22 @@ class Floor:
         if self.ducked:
             self.ducked = False
             self.out.append(Unduck(r.rid))
-        self._settle_announcements(r)
-        self._floor("end", reason, paused_by=list(r.paused_by))
-        self.last_reply = Interrupted(self._spoken(r), r.question) if r.kind == "answer" else None
+        if reason == "restart":
+            for a in self.announcements:            # the restarted reply carries them on, same tries
+                if a.state == "carried" and a.rid == r.rid:
+                    a.state = "queued"
+        else:
+            self._settle_announcements(r)
+        self._floor("end", reason)
+        self.last_heard = Interrupted(self._spoken(r), r.question) if r.kind == "answer" else None
         self.reply = None
         self._cancel_timer("cap")
         self._cancel_timer("keepalive")
-        if reason != "restart":
-            self._close_utterance()
 
     def _close_utterance(self) -> None:
-        """The utterance ends: its label gets its turn_end_detected if no content played, and every
-        unresolved segment carries over into the next utterance."""
+        """The utterance ends (its reply ended, or words interrupted it): its label gets its
+        turn_end_detected if no content played, and every unresolved segment carries over into the
+        next utterance. Callers: the reply-end handlers and _interrupt; never a join restart."""
         u = self.utt
         if u.label is not None and u.label not in self.ted_labels:
             self._turn_end_detected(u)
@@ -982,7 +1002,7 @@ class Floor:
                 self._set_timer("announce", self.now + self.cfg["announce_quiet_ms"])
         else:
             self._cancel_timer("announce")
-        on = r is not None and (r.heard == "content" or (r.gate != "paused" and r.has_audio))
+        on = r is not None and (r.heard == "content" or (r.gate != "paused" and not r.drained))
         if on != self.floor_on:
             self.floor_on = on
             self.out.append(SetFloor(on))

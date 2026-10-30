@@ -140,9 +140,10 @@ class Sim:
         if rid is not None and (rid in self.dead or rid != self.cur):
             return                                   # the adapter drops a stale reply's callbacks
         if isinstance(ev, F.TtsPiece):
-            if not (self.sink.paused and ev.kind == "keepalive"):
-                self.sink.q.append([ev.piece, ev.kind, ev.text, ev.dur_ms, 0.0])
+            self.sink.q.append([ev.piece, ev.kind, ev.text, ev.dur_ms, 0.0])
         self.events.append((ev.t_ms, ev))
+        if self.checker:
+            self.checker.before(ev)
         acts = self.f.on(ev)
         for a in acts:
             self.acts.append((ev.t_ms, a))
@@ -150,17 +151,11 @@ class Sim:
             self.apply(a, ev.t_ms)
         if self.checker:
             self.checker.after(ev, acts)
-        if isinstance(ev, F.TtsDone):
-            self.tts_done.add(ev.rid)
-            if not self.sink.q and ev.rid == self.cur:
-                self.dispatch(F.Drained(ev.rid), ev.t_ms)
 
     def apply(self, a, t: float) -> None:
         if self.checker:
             self.checker.on_action(a)
         if isinstance(a, F.StartReply):
-            if self.checker:
-                self.checker.on_start(a)
             self.cur = a.rid
             self.sink = SimSink()
             self.sink.rid = a.rid
@@ -171,7 +166,11 @@ class Sim:
                 self.sink.q = []
         elif isinstance(a, F.Pause) and a.rid == self.sink.rid:
             self.sink.paused = True
-            self.sink.q = [p for p in self.sink.q if p[1] != "keepalive"]
+        elif isinstance(a, F.Drop) and a.rid == self.sink.rid:
+            had = bool(self.sink.q)
+            self.sink.q = [p for p in self.sink.q if p[0] != a.piece]
+            if had and not self.sink.q:
+                self.at(t, F.Drained(a.rid))         # nothing queued or buffered any more
         elif isinstance(a, F.Play) and a.rid == self.sink.rid:
             self.sink.paused = False
             if self.sink.q:
@@ -247,165 +246,293 @@ class InvariantError(AssertionError):
     pass
 
 
+@dataclass
+class _Seg:
+    utt: str
+    order: int
+    start: float
+    turn_end: Optional[float] = None
+    final: Optional[float] = None
+    seen: bool = False           # an interim came before the final
+    words_interim: bool = False  # an interim with ground-truth words came before the final
+
+
+@dataclass
+class _Reply:
+    rid: str
+    label: str
+    kind: str
+    question: str
+    start: float
+    carries: list
+    held: set                    # rule 1/5: segments unresolved at start or started before content
+    first_content: Optional[float] = None
+    brain_done: bool = False
+    tts_done: bool = False
+    error: bool = False
+    stopped: bool = False
+    drained: bool = True         # nothing queued since the sink's last drained
+    content: dict = field(default_factory=dict)   # piece -> dur_ms
+    played: dict = field(default_factory=dict)    # piece -> ms
+    det_pauses: list = field(default_factory=list)  # [t] detector pauses not yet ended
+    nowords_det_pauses: int = 0
+
+    @property
+    def ended(self) -> bool:
+        return self.stopped or self.error or (self.brain_done and self.tts_done and self.drained)
+
+
 class Checker:
-    """FLOOR-SPEC.md invariants. I3, I4, I5, I11, I12, I13 after every event; I1, I2, I6, I7, I8 at
-    quiescence. Words come from the scenario's ground truth (Sim.truth)."""
+    """FLOOR-SPEC.md invariants, judged only from ground truth (Sim.truth and the scripted segment
+    events) and from what the adapter sees (actions, the sink). It never reads the controller's
+    state. I3, I4, I5, I9, I10, I11, I12, I13 after every event; I1, I6, I7, I8 at quiescence.
+    I2's "noise never stops a reply" is checked on every stop (I9); its rewind clause is not."""
 
     def __init__(self, sim: Sim) -> None:
         self.sim = sim
-        self.ended: set = set()
-        self.stopped: set = set()
-        self.active: Optional[str] = None
+        self.cfg = sim.f.cfg                 # configuration only
+        self.segs: dict = {}                 # utt -> _Seg
+        self.ext: dict = {}                  # endpointer g -> utt
+        self.replies: dict = {}
+        self.order: list = []                # rids in start order
+        self.detector_t: list = []
+        self.word_finals: list = []          # times of finals whose ground truth has words
+        self.pending_words: set = set()
         self.last_q_by_label: dict = {}
-        self.pending_words: set = set()  # utts with an interim with words and no final yet
-        self.reply_label: dict = {}
+        self.ev = None
+        self.emits: list = []                # (t, Emit)
 
     def fail(self, inv: str, msg: str) -> None:
         raise InvariantError(f"{inv} at t={self.sim.t:.0f}: {msg}")
 
-    # -- per event -------------------------------------------------------------------------------
-    def on_start(self, a) -> None:
-        # I4 One voice: the previous reply ended or was stopped before a new one starts.
-        if self.active is not None and self.active not in self.ended | self.stopped:
-            self.fail("I4", f"{a.rid} started while {self.active} is live")
-        self.active = a.rid
-        self.reply_label[a.rid] = a.label
-        # I13 No same-question restart.
-        if a.kind == "answer":
-            if self.last_q_by_label.get(a.label) == a.question:
-                self.fail("I13", f"label {a.label} asked {a.question!r} twice in a row")
-            self.last_q_by_label[a.label] = a.question
-            self._check_order(a.question)
+    # -- ground truth ----------------------------------------------------------------------------
+    def _truth(self, utt: str) -> str:
+        return self.sim.truth.get(utt, "") or ""
 
-    def _check_order(self, question: str) -> None:
-        # I3 Right order: the question is word segments' finals, each at most once, in segment order.
-        words = _words_of(question)
-        segs = sorted((g, u) for u, g in self.sim.f.by_utt.items() if self.sim.truth.get(u))
-        i = 0
-        for _, u in segs:
-            w = _words_of(self.sim.truth[u])
-            if words[i:i + len(w)] == w:
-                i += len(w)
-        if i != len(words):
-            self.fail("I3", f"question {question!r} is not word finals in segment order")
-
-    def on_action(self, a) -> None:
-        """Each action in order, as the adapter applies it."""
-        if isinstance(a, F.StopReply):
-            self.stopped.add(a.rid)
-        if isinstance(a, F.Play) and a.rid in self.stopped | self.ended:
-            self.fail("I4", f"play for ended reply {a.rid}")
-        if isinstance(a, F.Emit) and a.name == "x_floor" and a.fields.get("act") == "end":
-            self.ended.add(a.fields["rid"])
-
-    def after(self, ev, acts) -> None:
-        f, sim = self.sim.f, self.sim
-        if isinstance(ev, F.Interim) and self._words(ev.utt_id, ev.text):
-            seg = f.segs.get(f.by_utt.get(ev.utt_id))
-            if seg is not None and seg.status != "final":
-                self.pending_words.add(ev.utt_id)
-        if isinstance(ev, F.Final):
-            self.pending_words.discard(ev.utt_id)
-        # I5 No talking over words.
-        if self.pending_words and sim.sink.audible() and sim.sink.rid == sim.cur and sim.cur not in self.stopped:
-            self.fail("I5", f"audio plays while {sorted(self.pending_words)} has interim words")
-        r = f.reply
-        if r is None:
-            return
-        # I11 Pause set is live.
-        for g in r.pause_on:
-            s = f.segs[g]
-            if s.status == "final":
-                self.fail("I11", f"resolved g{g} in the pause set")
-            if s.kind == "blip" and f.now - s.start_ms > f.cfg["short_bargein_ms"]:
-                self.fail("I11", f"old blip g{g} in the pause set")
-        # I12 No early play from a hold.
-        if any(isinstance(a, F.Play) for a in acts) and r.pause_on:
-            newest = max(f.segs[g].start_ms for g in r.pause_on)
-            if f.now < newest + f.cfg["pause_max_ms"] or not all(f._quiet(f.segs[g]) for g in r.pause_on):
-                self.fail("I12", f"play at {f.now:.0f} while held on {sorted(r.pause_on)}")
+    def _optional(self, utt: str) -> bool:
+        return getattr(self.sim.truth, "optional", lambda u: False)(utt)
 
     def _words(self, utt: str, text: str) -> bool:
-        truth = self.sim.truth.get(utt, "")
+        if hasattr(self.sim.truth, "interim_has_words"):
+            return self.sim.truth.interim_has_words(utt, text)
+        truth = self._truth(utt)
         return bool(truth) and bool(set(_words_of(text)) & set(_words_of(truth)))
+
+    def _unresolved(self) -> list:
+        return [s for s in self.segs.values() if s.final is None]
+
+    def _quiet(self, s: _Seg) -> bool:
+        """Rule 4, from ground truth: an interim with no words, or the turn_end with none."""
+        return not s.words_interim and (s.seen or s.turn_end is not None)
+
+    def partition(self, question: str) -> Optional[list]:
+        """The word segments whose truths make up `question`, in segment order, or None."""
+        words = _words_of(question)
+        segs = sorted((s for s in self.segs.values() if _words_of(self._truth(s.utt))), key=lambda s: s.order)
+        texts = [_words_of(self._truth(s.utt)) for s in segs]
+
+        def fits(i: int, k: int) -> Optional[list]:
+            if i == len(words):
+                return []
+            for j in range(k, len(texts)):
+                w = texts[j]
+                if words[i:i + len(w)] == w:
+                    rest = fits(i + len(w), j + 1)
+                    if rest is not None:
+                        return [segs[j]] + rest
+            return None
+
+        return fits(0, 0) if words else None
+
+    def before(self, ev) -> None:
+        """Record the event's ground truth before the controller sees it."""
+        self.ev = ev
+        t = ev.t_ms
+        if isinstance(ev, F.SpeechStart):
+            s = _Seg(ev.utt_id, len(self.segs), t)
+            self.segs[ev.utt_id], self.ext[ev.g] = s, ev.utt_id
+            r = self._live()
+            if r is not None and r.first_content is None:
+                r.held.add(ev.utt_id)
+        elif isinstance(ev, F.Interim):
+            s = self.segs.get(ev.utt_id)
+            if s is not None and s.final is None:
+                s.seen = True
+                if self._words(ev.utt_id, ev.text):
+                    s.words_interim = True
+                    self.pending_words.add(ev.utt_id)
+        elif isinstance(ev, F.TurnEnd):
+            s = self.segs.get(self.ext.get(ev.g))
+            if s is not None and s.turn_end is None:
+                s.turn_end = t
+        elif isinstance(ev, F.Final):
+            s = self.segs.get(ev.utt_id)
+            if s is not None and s.final is None:
+                s.final = t
+                self.pending_words.discard(ev.utt_id)
+                if self._truth(ev.utt_id):
+                    self.word_finals.append(t)
+        elif isinstance(ev, F.Detector) and ev.decision == "barge_in":
+            self.detector_t.append(t)
+        elif getattr(ev, "rid", None) in self.replies:
+            r = self.replies[ev.rid]
+            if isinstance(ev, F.BrainDone):
+                r.brain_done = True
+            elif isinstance(ev, F.TtsDone):
+                r.tts_done = True
+            elif isinstance(ev, F.BrainError):
+                r.error = True
+            elif isinstance(ev, F.TtsPiece):
+                r.drained = False
+                if ev.kind == "content":
+                    r.content[ev.piece] = ev.dur_ms
+            elif isinstance(ev, F.Drained):
+                r.drained = True
+            elif isinstance(ev, F.Played) and ev.piece in r.content:
+                r.played[ev.piece] = max(r.played.get(ev.piece, 0.0), ev.ms)
+                if r.first_content is None:
+                    r.first_content = t
+
+    def _live(self) -> Optional[_Reply]:
+        r = self.replies.get(self.order[-1]) if self.order else None
+        return r if r is not None and not r.ended else None
+
+    def _heard(self, r: _Reply) -> bool:
+        """Rule 7, from what played: brain and TTS done and 60% of the content audio played."""
+        total = sum(r.content.values())
+        done = sum(min(r.played.get(p, 0.0), d) for p, d in r.content.items())
+        return r.brain_done and r.tts_done and total > 0 and done / total >= self.cfg["heard_frac"]
+
+    # -- actions, in the order the adapter applies them ------------------------------------------
+    def on_action(self, a) -> None:
+        sim, t, ev = self.sim, self.sim.t, self.ev
+        if isinstance(a, F.StartReply):
+            prev = self.replies.get(self.order[-1]) if self.order else None
+            # I4 One voice: the previous reply ended, or was stopped, before a new one starts.
+            if prev is not None and not prev.ended:
+                self.fail("I4", f"{a.rid} started while {prev.rid} is live")
+            # I6: never carry an item a reply already told.
+            for c in a.carries:
+                if any(c["id"] in x.carries and self._heard(x) for x in self.replies.values()):
+                    self.fail("I6", f"{a.rid} carries heard item {c['id']}")
+            unresolved = {s.utt for s in self._unresolved()}
+            self.replies[a.rid] = _Reply(a.rid, a.label, a.kind, a.question, t, [c["id"] for c in a.carries],
+                                         unresolved)
+            self.order.append(a.rid)
+            if a.kind == "answer":
+                # I13 No same-question restart.
+                if self.last_q_by_label.get(a.label) == a.question:
+                    self.fail("I13", f"label {a.label} asked {a.question!r} twice in a row")
+                self.last_q_by_label[a.label] = a.question
+                # I3 Right order.
+                if self.partition(a.question) is None:
+                    self.fail("I3", f"question {a.question!r} is not word finals in segment order")
+            return
+        r = self.replies.get(getattr(a, "rid", None))
+        if isinstance(a, F.StopReply) and r is not None:
+            r.stopped = True
+            # I9 (and I2): only words stop a reply; a brain error or the session end may too.
+            ok = (isinstance(ev, F.Final) and (self._truth(ev.utt_id) or self._optional(ev.utt_id))
+                  or isinstance(ev, (F.BrainError, F.End)))
+            if not ok:
+                self.fail("I9", f"{a.rid} stopped by {type(ev).__name__} without words")
+        elif isinstance(a, F.Pause) and r is not None:
+            if isinstance(ev, F.Detector):
+                if sim.f.cfg["speakers"]:
+                    self.fail("I9", "a detector decision paused a reply on speakers")
+                if r.first_content is not None:
+                    r.det_pauses.append(t)
+        elif isinstance(a, F.Play) and r is not None:
+            if r.ended:
+                self.fail("I4", f"play for ended reply {a.rid}")
+            # I10 No stutter: a detector pause has ended with no words when the reply plays with
+            # nothing unresolved and no word final since the pause.
+            if not self._unresolved():
+                for tp in r.det_pauses:
+                    if not any(tp <= tf <= t for tf in self.word_finals):
+                        r.nowords_det_pauses += 1
+                r.det_pauses = []
+                if r.nowords_det_pauses > self.cfg["max_nowords_pauses"]:
+                    self.fail("I10", f"{a.rid} had {r.nowords_det_pauses} no-word detector pauses")
+        elif isinstance(a, F.Emit):
+            self.emits.append((t, a))
+
+    # -- after every event -----------------------------------------------------------------------
+    def after(self, ev, acts) -> None:
+        sim, t = self.sim, self.sim.t
+        r = self._live()
+        audible = r is not None and sim.sink.rid == r.rid and sim.sink.audible()
+        # I5 No talking over words.
+        if audible and self.pending_words:
+            self.fail("I5", f"audio plays while {sorted(self.pending_words)} has interim words")
+        if r is None:
+            return
+        # I12 No early play from a hold: rule 1/5 holds play only at rule 4's time.
+        held = [self.segs[u] for u in r.held if self.segs[u].final is None]
+        if audible and held:
+            cap = max(s.start for s in held) + self.cfg["pause_max_ms"]
+            if t < cap or not all(self._quiet(s) for s in held):
+                self.fail("I12", f"{r.rid} plays at {t:.0f} while held on {sorted(s.utt for s in held)}")
+        # I11 Pause set is live: a paused gate with audio waits only on an unresolved segment or a
+        # detector barge-in younger than short_bargein_ms.
+        if sim.sink.rid == r.rid and sim.sink.paused and sim.sink.q:
+            young = any(t - td <= self.cfg["short_bargein_ms"] for td in self.detector_t)
+            if not self._unresolved() and not young:
+                self.fail("I11", f"{r.rid} paused with nothing unresolved")
 
     # -- at quiescence ---------------------------------------------------------------------------
     def quiescent(self) -> None:
-        sim, f = self.sim, self.sim.f
-        if f.ended:
+        sim = self.sim
+        if any(isinstance(e, F.End) for _, e in sim.events):
             return
-        # The quiescence condition itself.
-        open_segs = [g for g, s in f.segs.items() if s.status != "final"]
+        open_segs = [s.utt for s in self._unresolved()]
         if open_segs or sim.timers or sim.q or sim.sink.q:
             self.fail("quiescence", f"open {open_segs}, timers {sim.timers}, sink {len(sim.sink.q)}")
-        # I8 No deadlock.
-        if f.reply is not None:
-            self.fail("I8", f"reply {f.reply.rid} still live (gate {f.reply.gate})")
-        ends = sim.ends()
-        starts = sim.starts()
-        errors = {rid for rid, why in ends.items() if why == "error"}
-        # I1 No lost question.
-        last_by_label = {}
-        for a in starts:
-            last_by_label[a.label] = a
-        for utt, words in sim.truth.items():
-            if not words:
-                continue
-            w = " ".join(_words_of(words))
-            hits = [a for a in last_by_label.values() if w in " ".join(_words_of(a.question))]
-            if not hits:
-                if any(w in " ".join(_words_of(a.question)) for a in starts if a.rid in errors):
-                    continue
-                self.fail("I1", f"{utt} {words!r} is in no label's last question")
-            if not any(ends.get(a.rid) in ("drained", "interrupt") or a.rid in errors for a in hits):
-                self.fail("I1", f"{utt}: last reply ended {[ends.get(a.rid) for a in hits]}")
-        # I2 Noise never costs an answer.
-        word_starts = [e.t_ms for _, e in sim.events if isinstance(e, F.SpeechStart) and sim.truth.get(e.utt_id)]
-        for t0, fields in sim.floor_log("end"):
-            rid = fields["rid"]
-            by = fields.get("paused_by", [])
-            a = next(x for x in starts if x.rid == rid)
-            if not by or a.kind != "answer":
-                continue
-            if any(u and sim.truth.get(u) for u in by):
-                continue
-            began = next(t for t, x in sim.ops(F.StartReply) if x.rid == rid)
-            if any(began <= ts <= t0 for ts in word_starts):
-                continue
-            if fields["reason"] != "drained":
-                self.fail("I2", f"{rid} paused only by noise ended {fields['reason']}")
+        # I8 No deadlock: every reply ended.
+        for r in self.replies.values():
+            if not r.ended:
+                self.fail("I8", f"reply {r.rid} never ended")
+        answers = [self.replies[rid] for rid in self.order if self.replies[rid].kind == "answer"]
+        last = {}
+        for r in answers:
+            last[r.label] = r
+        # I1 No lost question: every word segment is in the last question of a label. (That
+        # reply drained, or words stopped it: I9 checks every stop.)
+        covered = set()
+        for r in last.values():
+            covered |= {s.utt for s in self.partition(r.question) or []}
+        errored = set()
+        for r in answers:
+            if r.error:
+                errored |= {s.utt for s in self.partition(r.question) or []}
+        for utt, s in self.segs.items():
+            if self._truth(utt) and not self._optional(utt) and utt not in covered | errored:
+                self.fail("I1", f"{utt} {self._truth(utt)!r} is in no label's last question")
         # I6 Announcements once.
-        heard = [f_["id"] for _, f_ in sim.floor_log("announce_heard")]
-        for item in f.announcements:
-            if heard.count(item.id) != 1:
-                self.fail("I6", f"announcement {item.id} heard {heard.count(item.id)} times")
-        seen_heard: set = set()
-        for t, a in sim.acts:
-            if isinstance(a, F.StartReply):
-                for c in a.carries:
-                    if c["id"] in seen_heard:
-                        self.fail("I6", f"{a.rid} carries heard item {c['id']}")
-            if isinstance(a, F.Emit) and a.name == "x_floor" and a.fields.get("act") == "announce_heard":
-                seen_heard.add(a.fields["id"])
+        items = {c for r in self.replies.values() for c in r.carries}
+        items |= {e.id for _, e in sim.events if isinstance(e, F.TaskResult)}
+        for item in items:
+            n = sum(1 for r in self.replies.values() if item in r.carries and self._heard(r))
+            if n != 1:
+                self.fail("I6", f"announcement {item} heard {n} times")
         # I7 Metrics.
-        user_labels = {a.label for a in starts if a.kind == "answer"}
-        ted = sim.emits("turn_end_detected")
-        fra = sim.emits("first_reply_audio")
-        for lab in user_labels:
-            n = [x for x in ted if x[1].label == lab]
-            if len(n) != 1:
-                self.fail("I7", f"label {lab} has {len(n)} turn_end_detected")
-            fr = [x for x in fra if x[1].label == lab]
-            if len(fr) > 1:
-                self.fail("I7", f"label {lab} has {len(fr)} first_reply_audio")
-            if fr and fr[0][0] < n[0][1].fields["t_ms"]:
-                self.fail("I7", f"label {lab} first_reply_audio before its turn_end_detected")
+        ted = [(t, e) for t, e in self.emits if e.name == "turn_end_detected"]
+        fra = [(t, e) for t, e in self.emits if e.name == "first_reply_audio"]
+        for lab in last:
+            mine = [e for _, e in ted if e.label == lab]
+            if len(mine) != 1:
+                self.fail("I7", f"label {lab} has {len(mine)} turn_end_detected")
+            heard = [r for r in answers if r.label == lab and r.first_content is not None]
+            first = min(heard, key=lambda r: r.first_content) if heard else last[lab]
+            segs = self.partition(first.question) or []
+            want = max(segs, key=lambda s: s.order).turn_end if segs else None
+            if mine[0].fields["t_ms"] != want:
+                self.fail("I7", f"label {lab} turn_end_detected t_ms {mine[0].fields['t_ms']} != {want}")
+            got = [t for t, e in fra if e.label == lab]
+            if heard and got != [first.first_content]:
+                self.fail("I7", f"label {lab} first_reply_audio at {got}, content at {first.first_content}")
+            if not heard and got:
+                self.fail("I7", f"label {lab} first_reply_audio with no content")
         for _, e in ted:
-            if e.label not in user_labels:
+            if e.label not in last:
                 self.fail("I7", f"turn_end_detected for unanswered label {e.label}")
-        for lab in {a.label for a in starts}:
-            heard_content = any(a.label == lab and any(
-                isinstance(ev, F.Played) and ev.rid == a.rid and ev.piece.startswith("p") for _, ev in sim.events)
-                for a in starts)
-            if heard_content and not [x for x in fra if x[1].label == lab]:
-                self.fail("I7", f"label {lab} has heard content but no first_reply_audio")

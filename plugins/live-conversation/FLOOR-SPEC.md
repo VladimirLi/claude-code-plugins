@@ -121,9 +121,12 @@ All of the controller's state, and nothing else:
     segments:  g -> {kind: segment | blip, utt_id, hint, status: open | ended | final,
                      start_ms, speech_end_ms, text, over_heard: bool | None,
                      caused: none | pause | duck, interim_seen_ms, interim_words, last_interim}
-    utterance: {label | None, segs: [g, ...], last_word_end_ms}
+    utterance: {label | None, segs: [g, ...], last_word_end_ms}   # segs: its word segments and
+                                                                  # every unresolved segment
+
     reply:     None | Reply
     last_context: None | Interrupted(spoken, question)       # for the next reply after a stop or error
+    last_heard: None | Interrupted(spoken, question)         # the last ended answer, for words over its end
     played:    [(rid, piece, kind, t_start_ms, t_end_ms, text)]   # echo window, tail, over_heard
     announcements: [{id, prompt, label, state: queued | carried(rid) | heard, tries}]
     timers:    name -> due_ms
@@ -139,9 +142,16 @@ All of the controller's state, and nothing else:
             | paused(on: {g, ...}, cause: hold | barge_in, since_ms)
             | tentative(on: {g, ...})
       ducked_on: {g, ...}, detector_ducked: bool, resumed_ms, nowords_pauses: int
+      speech_since_resume: bool       # rule 2's guard ends at a new speech_start
+      episode_paused: bool            # this pause stopped heard audio (playback_paused was emitted)
+      drained: bool                   # nothing queued or buffered at the gate
+      ka_heard: bool                  # a keepalive played with the gate open (rule 3 join)
+      sound_ms, ka_sent_ms            # rule 8's timer: last play or content audio, last keepalive
       offset: (piece, ms into piece) of the last played audio
 
 `cause` and `since_ms` are set by the first entry into the pause set and kept until it empties.
+*Note (step 3): `since_ms` is also reset when a tentative play stops again, so the rewind measures
+the silence the user heard.*
 "The pause set" below means the set in `paused(on)` or `tentative(on)`. An utterance's label comes
 from the `hint` of its first word segment if the bench gave one.
 
@@ -168,7 +178,8 @@ from the `hint` of its first word segment if the bench gave one.
 |---|---|
 | `start_reply(rid, label, question, context, carries)` | start the brain. If a stop is still running (`brain.cancel` can wait up to 5 s, brain.py:551), the brain pool waits as today (brain.py:677-686) |
 | `stop_reply(rid)` | cancel the brain and TTS; drop queued and buffered audio |
-| `pause(rid)` | stop playback at once; keep every piece's audio; buffer new TTS output; drop a keepalive piece |
+| `pause(rid)` | stop playback at once; keep every piece's audio; buffer new TTS output |
+| `drop(rid, piece)` | drop a keepalive piece: the one playing at a pause, or one that arrives while paused (rule 8) |
 | `play(rid, rewind_ms)` | flush the sink, write again from `rewind_ms` before the pause point (moved to a word boundary), then the buffered pieces; then `bargein.reset()` |
 | `duck(rid)` / `unduck(rid)` | set the sink's gain |
 | `reset_detector()` | `bargein.reset()`, so the detector can fire again |
@@ -211,6 +222,10 @@ The word boundary is estimated from the piece's length, because the TTS gives no
    - **Both modes**: an interim with words (non-empty after `meaningful`, and not a backchannel over
      heard content), in a segment over heard content so far, pauses at once (`cause = barge_in`).
      The 2-pause limit and the resume guard never block this.
+     *Note (step 3): it pauses for any segment while a reply exists, over heard or not, because I5
+     forbids audio over interim words (a question tail "Yes", or words in a silence of the reply);
+     such words interrupt at their final anyway. An interim pause does not count as the segment
+     having "paused the gate" for over heard content.*
    - The volume is ducked exactly while `ducked_on` is non-empty or `detector_ducked` is true. When a
      segment or blip in `ducked_on` resolves, it leaves the set.
    - A segment that pauses nothing is still read when its final comes (rule 3).
@@ -220,7 +235,9 @@ The word boundary is estimated from the piece's length, because the TTS gives no
      When the pause set is empty, `play`. Nothing is asked again.
    - **Interim words but a final with no words** (an STT dropout; session issue 4): use the
      segment's last interim text as its final, and go on below.
-     *Note (step 3): this test runs first, before "No words"; in the order above it could never apply.*
+     *Note (step 3): this test runs first, before "No words"; in the order above it could never apply.
+     It applies only when the final itself has no words (empty, hums, a hallucination), not when it
+     is a backchannel: the interim "got" of "got it" is not the user's words (fuzz seed 1076).*
    - **Words, and g is part of the current reply's question** (it is in `reply.segs`: it started
      before `start_reply`, including segments carried in at an interrupt): **join**, whatever its
      over-heard flag.
@@ -264,6 +281,8 @@ The word boundary is estimated from the piece's length, because the TTS gives no
      with `tries + 1`, and the next try sends `ANNOUNCE_RETRY_NOTE` (orchestrator.py:103) or
      `ANNOUNCE_CARRY_NOTE`, as today.
    - A heard item is never carried again.
+   - *Note (step 3): a join restart is not an end for this: the new reply carries the same items
+     with the same `tries`, so an item never heard gets no retry note.*
 8. **Keepalive.** While the brain runs, the gate is open, and nothing has played for
    `keepalive_after_ms` (4.5 s), the controller sends `keepalive`, then again every
    `keepalive_every_ms` (9 s). The 4.5 s timer restarts on every `play`. No keepalive is sent while
