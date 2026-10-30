@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 const RUN = '/tmp/claude-live-conversation/s1'
 
-function engine(on: On, opts: { hasVenv?: boolean } = {}) {
+function engine(on: On, opts: { hasVenv?: boolean; setupFails?: boolean } = {}) {
   const w = {
     status: [] as (string | undefined)[],
     toasts: [] as string[],
@@ -40,11 +40,17 @@ function engine(on: On, opts: { hasVenv?: boolean } = {}) {
   })
   on('process.run', (_, e) => {
     w.runs.push([...e.argv])
+    if (e.argv.includes('--check')) return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
     if (e.argv[0] === 'kill') w.say('EXIT')
     return { value: { exitCode: 0, stdout: '/usr/bin/rec\n', stderr: '' } } as never
   })
   on('process.spawn', async function* (_: unknown, e: ProcessSpawnRequest) {
     w.spawned.push([...e.argv])
+    if (e.argv[1]?.endsWith('bin/live-setup')) {
+      yield { stream: 'stdout' as const, text: 'setup: installing speech packages\n' }
+      yield { stream: 'stdout' as const, text: opts.setupFails ? 'setup failed: needs Python 3.11 or newer, or uv\n' : 'setup: done\n/home/v/venv/bin/python\n' }
+      return { value: { code: opts.setupFails ? 1 : 0, signal: null } }
+    }
     for (;;) {
       const line = w.lines.shift()
       if (line === 'EXIT') break
@@ -64,12 +70,26 @@ function engine(on: On, opts: { hasVenv?: boolean } = {}) {
 }
 
 
-test('without the venv, /live says how to set it up', async ($, on) => {
-  const { w } = engine(on, { hasVenv: false })
+test('an installed copy sets itself up on the first /live, then starts the daemon', async ($, on) => {
+  const { w, clock } = engine(on, { hasVenv: false })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
   const { text } = await $.command.run({ command: 'live', args: '' } as never)
-  expect(text).toContain('python3 -m venv .venv')
-  expect(w.spawned).toHaveLength(0)
+  expect(text).toContain('First run: setting up')
+  await clock.advance(0)
+  expect(w.spawned[0]![1]).toMatch(/bin\/live-setup$/)
+  expect(w.status).toContain('live: setting up: installing speech packages')
+  expect(w.spawned[1]).toEqual(['/home/v/venv/bin/python', '-m', 'live', '--cwd', '/work/project', '--run-dir', RUN])
+})
+
+test('a failed setup says why and leaves live off', async ($, on) => {
+  const { w, clock } = engine(on, { hasVenv: false, setupFails: true })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  await $.command.run({ command: 'live', args: '' } as never)
+  await clock.advance(0)
+  expect(w.spawned).toHaveLength(1)
+  expect(w.toasts.at(-1)).toContain('setup failed: needs Python 3.11 or newer, or uv')
+  expect(w.status.at(-1)).toBeUndefined()
+  expect((await $.command.run({ command: 'live', args: 'status' } as never)).text).toContain('Live conversation is off')
 })
 
 test('/live starts the daemon, a handed-off task goes to the session and its answer back to the daemon', async ($, on) => {

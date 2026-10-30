@@ -99,26 +99,57 @@ function onEvent($: EngineInterface, e: Record<string, unknown>): void {
   showStatus($)
 }
 
+// The daemon's Python: a dev checkout's own .venv, else the shared environment bin/live-setup
+// builds (it survives plugin updates, which land in a new folder each time).
+async function devPython($: EngineInterface): Promise<string | undefined> {
+  const p = `${$.plugin.root}/.venv/bin/python`
+  return (await $.fs.exists(p)) ? p : undefined
+}
+
+// Runs bin/live-setup (instant when nothing changed), its progress in the status line.
+// Resolves the python path, or undefined after telling the user why it failed.
+async function setup($: EngineInterface, d: Daemon): Promise<string | undefined> {
+  const child = $.process.spawn({ argv: ['/bin/bash', `${$.plugin.root}/bin/live-setup`], cwd: $.plugin.root })
+  d.kill = () => void child.return(undefined as never)
+  let out = ''
+  let last = ''
+  for await (const { stream, text } of child) {
+    if (stream === 'stdout') out += text
+    for (const line of text.split('\n')) {
+      if (line.startsWith('setup')) {
+        last = line
+        d.phase = line.replace(/^setup: /, 'setting up: ')
+        $.ui.status(`live: ${d.phase}`)
+      } else if (line.trim()) d.tail = [...d.tail.slice(-19), line]
+    }
+  }
+  const { code } = await child.result
+  const python = out.trim().split('\n').at(-1) ?? ''
+  if (code === 0 && python.startsWith('/')) return python
+  if (!d.isStopping) {
+    $.ui.toast(`live: ${last.startsWith('setup failed') ? last : 'setup failed'}. /live status has more.`, { timeoutMs: 15000 })
+  }
+  return undefined
+}
+
 async function startDaemon($: EngineInterface): Promise<string> {
   const root = $.plugin.root
-  const python = `${root}/.venv/bin/python`
-  if (!(await $.fs.exists(python))) {
-    return (
-      'Live conversation needs a one-time setup first (see the plugin README). It needs Python 3.11 or newer\n' +
-      '(macOS ships 3.9: brew install sox python, then use the Homebrew python3):\n' +
-      `  cd "${root}"\n  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt\n` +
-      '  .venv/bin/pip install --no-deps -r requirements-nodeps.txt'
-    )
+  const dev = await devPython($)
+  let firstRun = false
+  if (dev) {
+    const which = await $.process.run(['/bin/sh', '-c', 'command -v rec && command -v play']).catch(() => undefined)
+    if (!which || which.exitCode !== 0) return 'Live conversation needs sox for the microphone: brew install sox'
+  } else {
+    const check = await $.process.run(['/bin/bash', `${root}/bin/live-setup`, '--check']).catch(() => undefined)
+    firstRun = !check || check.exitCode !== 0
   }
-  const which = await $.process.run(['/bin/sh', '-c', 'command -v rec && command -v play']).catch(() => undefined)
-  if (!which || which.exitCode !== 0) return 'Live conversation needs sox for the microphone: brew install sox'
 
   const cwd = await $.session.root()
   const runDir = await runDirOf($)
   let resolveEnded = () => {}
   const ended = new Promise<void>(r => (resolveEnded = r))
   const d: Daemon = {
-    runDir, cwd, phase: 'starting', startedAt: await $.clock.now(), isStopping: false,
+    runDir, cwd, phase: firstRun ? 'setting up' : 'starting', startedAt: await $.clock.now(), isStopping: false,
     kill: () => {}, ended, tail: [], lastTms: 0,
   }
   daemon = d
@@ -126,6 +157,18 @@ async function startDaemon($: EngineInterface): Promise<string> {
   // Start from a timer, so the child belongs to no command's dispatch and lives on.
   $.clock.after(0, () => {
     void (async () => {
+      const python = dev ?? (await setup($, d).catch(err => {
+        d.tail = [...d.tail, String(err)]
+        return undefined
+      }))
+      if (!python || d.isStopping) {
+        if (daemon === d) daemon = undefined
+        $.ui.status(undefined)
+        resolveEnded()
+        return
+      }
+      d.phase = 'starting'
+      $.ui.status('live: starting')
       const child = $.process.spawn({
         argv: [python, '-m', 'live', '--cwd', cwd, '--run-dir', runDir],
         cwd: root,
@@ -163,8 +206,13 @@ async function startDaemon($: EngineInterface): Promise<string> {
       }
     })()
   })
-  $.ui.status('live: starting')
+  $.ui.status(`live: ${d.phase}`)
+  const first = firstRun
+    ? 'First run: setting up the voice (about 1 GB of Python packages, a few minutes; the status line shows ' +
+      'progress). It starts by itself when done, then is ready in about 30 seconds. '
+    : ''
   return (
+    first +
     'Live conversation starting: it is ready in about 30 seconds, when the status line says "live: listening". ' +
     'Talk; /live stops it. ' +
     'Use headphones. Ask for a code change and the voice hands it to this session, then tells you the result.'

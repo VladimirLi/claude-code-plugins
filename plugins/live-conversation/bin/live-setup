@@ -1,0 +1,83 @@
+#!/bin/bash
+# One-time setup for live-conversation; /live runs it before every start.
+#
+# Builds the Python environment the voice daemon runs in, shared by every installed
+# copy of the plugin (each plugin update lands in a new folder), at
+# $LIVE_VENV (default ~/.claude/live-conversation/venv). It exits at once when the
+# environment already matches this copy's requirements files.
+#
+# Uses uv when it is there (it fetches a Python by itself), else any Python 3.11+.
+# Installs sox with Homebrew when the microphone tools are missing.
+# Prints one progress line per step; the last line says what failed.
+#
+#   live-setup           set up if needed, print the environment's python path last
+#   live-setup --check   exit 0 if ready, 1 if a setup is needed (does nothing)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV="${LIVE_VENV:-$HOME/.claude/live-conversation/venv}"
+PY_VERSION="3.12"   # the newest Python with wheels for everything (torch, mlx-whisper, spacy)
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+stamp() { cat "$ROOT/requirements.txt" "$ROOT/requirements-nodeps.txt" | shasum | cut -c1-16; }
+WANT="$(stamp)"
+ready() { [ -x "$VENV/bin/python" ] && [ "$(cat "$VENV/.live-stamp" 2>/dev/null)" = "$WANT" ]; }
+
+if [ "${1:-}" = "--check" ]; then
+  ready && command -v rec >/dev/null && exit 0
+  exit 1
+fi
+
+if ! command -v rec >/dev/null || ! command -v play >/dev/null; then
+  if command -v brew >/dev/null; then
+    echo "setup: installing sox (microphone and speaker) with Homebrew"
+    brew install sox >/dev/null
+  else
+    echo "setup failed: needs sox for the microphone. Install Homebrew, then: brew install sox"
+    exit 1
+  fi
+fi
+
+if ready; then
+  echo "$VENV/bin/python"
+  exit 0
+fi
+
+mkdir -p "$(dirname "$VENV")"
+LOG="$(dirname "$VENV")/setup.log"
+: > "$LOG"
+run() { "$@" >>"$LOG" 2>&1 || { echo "setup failed: $* (log: $LOG)"; tail -3 "$LOG" | sed 's/^/  /'; exit 1; }; }
+
+rm -rf "$VENV"
+if command -v uv >/dev/null; then
+  echo "setup: making a Python $PY_VERSION environment with uv"
+  run uv venv --quiet --python "$PY_VERSION" "$VENV"
+  pip=(uv pip install --quiet --python "$VENV/bin/python")
+else
+  PY=""
+  for c in python3.12 python3.13 python3.11 python3.14 python3.15 python3; do
+    p="$(command -v "$c" || true)"
+    if [ -n "$p" ] && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+      PY="$p"; break
+    fi
+  done
+  if [ -z "$PY" ]; then
+    echo "setup failed: needs Python 3.11 or newer, or uv. Easiest: brew install uv"
+    exit 1
+  fi
+  echo "setup: making an environment with $("$PY" --version)"
+  run "$PY" -m venv "$VENV"
+  run "$VENV/bin/python" -m pip install --quiet --upgrade pip
+  pip=("$VENV/bin/python" -m pip install --quiet)
+fi
+
+echo "setup: installing speech packages (about 1 GB, a few minutes the first time)"
+run "${pip[@]}" -r "$ROOT/requirements.txt"
+echo "setup: installing the voice"
+run "${pip[@]}" --no-deps -r "$ROOT/requirements-nodeps.txt"
+echo "setup: checking the install"
+run "$VENV/bin/python" -c "import numpy, torch, kokoro, mlx_whisper, websockets"
+
+echo "$WANT" > "$VENV/.live-stamp"
+echo "setup: done"
+echo "$VENV/bin/python"

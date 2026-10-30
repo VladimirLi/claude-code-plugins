@@ -22,19 +22,19 @@ claude plugin install live-conversation --marketplace VladimirLi/claude-code-plu
 
 Requires macOS on Apple silicon and a Claude Code build that runs mods (hooks modules); tested on 2.1.312. The voice runs in a terminal session only (it needs the microphone of the machine Claude Code runs on).
 
-### One-time setup
+### First run
 
-The voice daemon is Python and needs its own environment in the plugin's folder. Run `/live` once: when the environment is missing it prints the commands with the plugin's folder filled in. They are:
+The first `/live` sets itself up: `bin/live-setup` builds the voice daemon's Python environment (about 1 GB of
+packages, a few minutes) while the status line shows each step, then the conversation starts by itself. Later
+starts skip this. The environment lives in `~/.claude/live-conversation/venv`, shared by every installed copy,
+so plugin updates do not set up again unless the requirements change. Set `LIVE_VENV` to put it elsewhere.
 
-```
-brew install sox python
-cd <plugin folder>
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pip install --no-deps -r requirements-nodeps.txt
-```
+Setup uses [uv](https://docs.astral.sh/uv/) when it is installed (it fetches Python 3.12 by itself), else any
+Python 3.11 or newer on your PATH; the `python3` that macOS ships is 3.9 and is not enough. It installs sox
+with Homebrew if the microphone tools are missing. If setup fails, the toast says why, `/live status` shows
+the last lines, and the full log is `~/.claude/live-conversation/setup.log`. `brew install uv` fixes most failures.
 
-It needs Python 3.11 or newer (tested on 3.15). The `python3` that macOS ships is 3.9 and cannot install the dependencies: check that `python3 --version` shows Homebrew's Python, or name it in full, such as `/opt/homebrew/bin/python3 -m venv .venv`.
+A checkout with its own `.venv` in the plugin folder (for development) uses that instead.
 
 The first start downloads the models once (under 1 GB, to `~/.cache/huggingface` and `~/.cache/live-conversation`): the Kokoro voice, Whisper base.en for the Mac's GPU, and the Smart Turn end-of-turn model.
 
