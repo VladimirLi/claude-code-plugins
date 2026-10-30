@@ -19,7 +19,7 @@ What makes the reply speakable fast:
   request is small and nothing runs before it;
 - start() warms a small pool of processes, times each one's first text on probe
   turns and keeps the two fastest; each turn is raced on both and the first to
-  start its reply wins (the other is interrupted before any tool runs, and gets
+  start answering (a text or tool block; a thinking block does not count) wins (the other is interrupted before any tool runs, and gets
   the exchange it missed as a context note on its next turn);
 - effort "low", which mostly skips adaptive thinking before the first word;
 - a voice system prompt (VOICE_PROMPT) that asks for a short first sentence, spoken
@@ -172,6 +172,7 @@ class _Cleaner:
 
 
 _SENTENCE = re.compile(r"[.!?](\s|$)")
+ANSWER_BLOCKS = ("text", "tool_use", "server_tool_use")
 
 
 class _Turn:
@@ -200,6 +201,11 @@ class _Turn:
         self.t0 = time.monotonic()
         self.started = asyncio.Event()           # the model began its reply (any content block)
         self.started_at: Optional[float] = None
+        self.first_kind: Optional[str] = None    # type of the first content block ("thinking", "text" ...)
+        # the model began to answer: a text or tool block. A thinking block comes before it and
+        # holds the first word back by 0.45-1.07 s (2026-10-30 replay), so the race waits for this.
+        self.answering = asyncio.Event()
+        self.answering_at: Optional[float] = None
 
     def _out(self, t: str) -> None:
         if t and self.ends_space and t[:1].isspace():
@@ -227,10 +233,14 @@ class _Turn:
     def on_event(self, ev: dict) -> None:
         et = ev.get("type")
         if et == "content_block_start":
+            kind = ev.get("content_block", {}).get("type")
             if not self.started.is_set():
                 self.started_at = time.monotonic()
+                self.first_kind = kind
                 self.started.set()
-            kind = ev.get("content_block", {}).get("type")
+            if kind in ANSWER_BLOCKS and not self.answering.is_set():
+                self.answering_at = time.monotonic()
+                self.answering.set()
             if kind == "text":
                 if self.held_closed:
                     self._release()
@@ -276,6 +286,9 @@ class _Turn:
         if not self.started.is_set():
             self.started_at = time.monotonic()
             self.started.set()
+        if not self.answering.is_set():
+            self.answering_at = time.monotonic()
+            self.answering.set()
         self.q.put_nowait(None)
 
 
@@ -547,13 +560,14 @@ class Brain:
         turns = list(await asyncio.gather(*(s.submit(self._message(s, text, interrupted)) for s in live)))
         w = 0
         if len(live) > 1:
-            waits = [asyncio.ensure_future(t.started.wait()) for t in turns]
+            # the first to start answering wins, not the first to start thinking
+            waits = [asyncio.ensure_future(t.answering.wait()) for t in turns]
             try:
                 await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 for x in waits:
                     x.cancel()
-            started = [(t.started_at, i) for i, t in enumerate(turns) if t.started_at is not None]
+            started = [(t.answering_at, i) for i, t in enumerate(turns) if t.answering_at is not None]
             w = min(started)[1]
             for i, s in enumerate(live):
                 if i != w:
@@ -565,7 +579,9 @@ class Brain:
         # timing of this turn, for the x_brain event: wait for an idle process, each racer's
         # reply start, the first text (set when the first delta is yielded)
         self.last_timing = {"idle_ms": ms(t_idle), "racers": len(live), "winner": self.wins[-1],
-                            "started_ms": [ms(t.started_at) for t in turns], "first_text_ms": None}
+                            "started_ms": [ms(t.started_at) for t in turns],
+                            "answering_ms": [ms(t.answering_at) for t in turns],
+                            "first_kind": [t.first_kind for t in turns], "first_text_ms": None}
         out: list[str] = []
         done = False
         try:

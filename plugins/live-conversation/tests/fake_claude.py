@@ -22,10 +22,13 @@ def next_delay():
                 break
             except FileExistsError:
                 i += 1
-    return delays[i % len(delays)] / 1000.0
+    return i, delays[i % len(delays)] / 1000.0
 
 
-DELAY = next_delay()
+SLOT, DELAY = next_delay()
+# FAKE_THINK: comma list of ms, per process like FAKE_DELAYS: a thinking block this long before the text
+_THINK = [int(x) for x in os.environ.get("FAKE_THINK", "0").split(",")]
+THINK = _THINK[SLOT % len(_THINK)] / 1000.0
 stop = threading.Event()
 lock = threading.Lock()
 
@@ -51,6 +54,12 @@ def answer(text):
     stop.clear()
     time.sleep(DELAY)
     ev({"type": "message_start", "message": {}})
+    if THINK:
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
+        if stop.wait(THINK):
+            out({"type": "result", "subtype": "error_during_execution"})
+            return
+        ev({"type": "content_block_stop", "index": 0})
     if "tool" in text:
         text_block(0, ["Let me ", "check."])
         ev({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "name": "Read"}})
