@@ -164,6 +164,72 @@ class TestStream(unittest.TestCase):
         self.assertLess(dt, 1.0)                 # did not wait for the 4 s long answer
 
 
+class TestToolBudget(unittest.TestCase):
+    """Bar session 20261030-110521 turn 5: "Can we see if there might be any other issues ... from the
+    logs" got "Let me check the logs ..." and then the voice brain dug with its own tools while the
+    user heard nothing. Past its tool budget the reply is stopped and the brain hands the work off."""
+
+    BAR = ("Can we see if there might be any other issues? for this plugin, from the logs, one thing that I "
+           "would like to... prove is that when the plugin has started and the state switch to listening")
+
+    def test_digging_reply_is_turned_into_a_handoff(self):
+        from live import tasks
+        async def go():
+            b = fake_brain(prompt_extra=tasks.handoff_prompt("live-task --run-dir /r"), tool_budget=2,
+                           tool_budget_s=30)
+            await b.start()
+            t0 = time.monotonic()
+            text = "".join([d async for d in b.respond(self.BAR)])
+            dt = time.monotonic() - t0
+            nudges = b.session.nudges
+            await b.close()
+            return text, dt, nudges
+        text, dt, nudges = run(go())
+        self.assertEqual(nudges, 1)
+        self.assertEqual(" ".join(text.split()), "Let me check the logs. Handing that to Claude Code. Task one.")
+        self.assertLess(dt, 2.0)                 # not the 2.4 s of eight tool calls
+
+    def test_time_budget(self):
+        async def go():
+            b = fake_brain(tool_budget=10, tool_budget_s=0.5)
+            await b.start()
+            text = "".join([d async for d in b.respond(self.BAR)])
+            n = b.session.nudges
+            await b.close()
+            return text, n
+        text, n = run(go())
+        self.assertEqual(n, 1)
+        self.assertTrue(text.startswith("Let me check the logs."))
+
+    def test_handoff_call_is_not_counted(self):
+        async def go():
+            b = fake_brain(tool_budget=1, tool_budget_s=0.1)
+            await b.start()
+            text = "".join([d async for d in b.respond("handoff please")])
+            n = b.session.nudges
+            await b.close()
+            return text, n
+        text, n = run(go())
+        self.assertEqual(n, 0)
+        self.assertEqual(" ".join(text.split()), "Handing that to Claude Code. Task one.")
+
+    def test_budget_off(self):
+        async def go():
+            b = fake_brain(tool_budget=0)
+            await b.start()
+            text = "".join([d async for d in b.respond(self.BAR)])
+            await b.close()
+            return text
+        self.assertEqual(" ".join(run(go()).split()), "Let me check the logs. Found nothing.")
+
+    def test_nudge_without_handoff_asks_for_an_answer(self):
+        from live import brain
+        from live import tasks
+        self.assertEqual(fake_brain()._new_session().nudge, brain.NUDGE_ANSWER)
+        b = fake_brain(prompt_extra=tasks.handoff_prompt("x"))
+        self.assertEqual(b._new_session().nudge, brain.NUDGE_HANDOFF)
+
+
 class TestPool(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.TemporaryDirectory()

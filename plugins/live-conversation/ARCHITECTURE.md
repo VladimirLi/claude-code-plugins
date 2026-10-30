@@ -172,6 +172,13 @@ tasks.handoff_prompt(cmd)                   # brain cfg "prompt_extra" (only wit
 orch.announce(prompt)                       # a brain turn played once the conversation is free
 ```
 
+The voice brain hands off every investigation (logs, bugs, checking behaviour), not only edits; it
+may do one quick lookup itself (two tool calls at most). Bar 20261030-110521 turn 5 instead said "Let me
+check the logs" and dug with its own tools in silence. The brain cfg `tool_budget` (2 calls) and
+`tool_budget_s` (8 s) enforce it: past the budget the reply is interrupted and the same process gets a
+note to hand the task off now (without a handoff prompt: to say what it found), which streams on as
+part of the same reply.
+
 `python -m live --run-dir DIR` turns this on (the mod passes
 `$TMPDIR/claude-live-conversation/<session id>`), writes `DIR/daemon.pid`, and
 stops cleanly on SIGTERM. The mod binds a task to its turn by the
