@@ -276,5 +276,37 @@ class TestPool(unittest.TestCase):
         self.assertTrue(msg.endswith("next"))
 
 
+class TestRaceSkipsThinking(unittest.TestCase):
+    """2026-10-30 replay: the race winner had started a thinking block at 0.95-1.06 s and its
+    first word came 0.45-1.07 s later; the other process was already cancelled."""
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        os.environ["FAKE_DELAYS"] = "60,300"
+        os.environ["FAKE_THINK"] = "1500,0"
+        os.environ["FAKE_COUNTER"] = os.path.join(self.d.name, "n")
+
+    def tearDown(self):
+        for k in ("FAKE_DELAYS", "FAKE_THINK", "FAKE_COUNTER"):
+            os.environ.pop(k)
+        self.d.cleanup()
+
+    def test_first_to_answer_wins_not_first_to_think(self):
+        async def go():
+            b = fake_brain(pool=2, probes=0, race=2, fast_ms=10000, pool_batches=1)
+            await b.start()
+            t0 = time.monotonic()
+            first = None
+            async for _ in b.respond("hi"):
+                if first is None:
+                    first = time.monotonic() - t0
+            timing = b.last_timing
+            await b.close()
+            return first, timing
+        first, timing = run(go())
+        self.assertLess(first, 1.0)                  # the 300 ms answer, not 60 ms + 1500 ms thinking
+        self.assertIn("thinking", timing["first_kind"])
+
+
 if __name__ == "__main__":
     unittest.main()
