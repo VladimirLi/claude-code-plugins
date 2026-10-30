@@ -32,7 +32,8 @@ DEFAULTS = {
     "tail_ms": 1000.0,           # question tail: the piece last played within this before the start
     "heard_frac": 0.6,           # rule 7: an announcement is heard at this share of content audio
     "max_nowords_pauses": 2,     # rule 2: then the detector only ducks
-    "echo_corr": 0.5,            # Words 1: an echo score at least this makes a segment echo
+    "echo_corr": 0.5,            # Words 0: an echo score at least this makes a segment echo
+    "echo_corr_clear": 0.3,      # Words 0: below this the segment is not echo, whatever its text
     "max_silent_tries": 3,       # rule 7: an item whose carrying replies played nothing this often is dropped
 }
 
@@ -351,6 +352,7 @@ class Seg:
     interim_words: bool = False
     last_interim: str = ""
     echo: bool = False           # its audio is the reply's echo: it never holds, pauses or ducks
+    echo_score: Optional[float] = None   # the latest score from the adapter
 
 
 @dataclass
@@ -503,6 +505,8 @@ class Floor:
         if seg is None or seg.status == "final":
             return
         seg.interim_seen_ms = self.now
+        if ev.echo is not None:
+            seg.echo_score = ev.echo
         if self._is_echo(ev.echo):
             self._echo_seg(seg)
             return
@@ -545,6 +549,8 @@ class Floor:
             seg.speech_end_ms = self.now
             seg.over_heard = self._over_heard(seg, self.now)
         seg.status = "final"
+        if ev.echo is not None:
+            seg.echo_score = ev.echo
         if self._is_echo(ev.echo) or (ev.echo is None and seg.echo):
             self._no_words(seg, "final_echo")       # Words 1: the reply's own audio, whatever the text
             return
@@ -751,6 +757,11 @@ class Floor:
                 s.add(seg.g)
 
     def _window(self, seg: Seg) -> list:
+        """The reply text played from echo_lead_ms before the segment: what its text is checked
+        against for echo (Words 1). Empty when the segment's audio is clearly not echo (a score
+        below echo_corr_clear): then no text rule may call the user's words echo."""
+        if seg.echo_score is not None and seg.echo_score < self.cfg["echo_corr_clear"]:
+            return []
         start = seg.start_ms - self.cfg["echo_lead_ms"]
         return [s.text for s in self.played if s.t_end_ms >= start]
 

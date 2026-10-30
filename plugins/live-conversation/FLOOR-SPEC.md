@@ -86,7 +86,9 @@ One new module, `live/floor.py`: a pure, synchronous state machine.
      with the segment's echo score (live/echo.py): the best normalized correlation of its mic
      audio with what the sink played 0-400 ms before. A score of at least `echo_corr` (0.5) makes
      the segment echo: no words, whatever the STT wrote. Someone talking over the reply lowers the
-     score, so a real interruption still counts. (A/B 2026-10-30: with echo, 20 of 25 interrupts
+     score, so a real interruption still counts. A score below `echo_corr_clear` (0.3) means not
+     echo whatever the text: no text rule of step 1 applies then; they apply with no score or a
+     score in [0.3, `echo_corr`). (A/B 2026-10-30: with echo, 20 of 25 interrupts
      were the reply's own audio, transcribed as misheard fragments: "Shreds are cheaper." over
      "Threads are cheaper", "something".)
   1. **Echo**: remove tokens of the reply text played from 0.5 s before the segment's start to now,

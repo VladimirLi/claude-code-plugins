@@ -871,6 +871,20 @@ class TestEcho(FloorCase):
         self.assertEqual([t for t, _ in sim.ops(F.Play)], [3600.0])   # not at the final (6100)
         self.assertOneAnswer(sim)
 
+    def test_users_words_repeating_the_reply_with_a_clear_score_are_words(self):
+        sim = Sim({"speakers": True}, plans=Plan(pieces=[("Now the tests pass.", 2000)]))
+        ask(sim)                                               # plays about 2220-4220
+        sim.say(2, 3000, 3600, "the tests", interims=[(3500, "the tests")], echo=0.1)
+        sim.run()
+        self.assertEqual(sim.questions(), [Q1, "the tests"])
+
+    def test_gray_zone_score_keeps_the_text_rule(self):
+        sim = Sim({"speakers": True}, plans=self.PLAN)
+        ask(sim)
+        sim.say(2, 2600, 3400, "Shreds are cheaper.", interims=[(3300, "Shreds are")], truth="", echo=0.4)
+        sim.run()
+        self.assertOneAnswer(sim)
+
     def test_short_echo_fragment(self):
         sim = Sim({"speakers": True}, plans=self.PLAN)
         ask(sim)
