@@ -80,6 +80,19 @@ class Components:
     turntaking: TurnTaking
 
 
+# announce(): sent before the prompt when an earlier try was cut before the user heard any of it
+ANNOUNCE_RETRY_NOTE = ('[Not heard yet: the message below reached you before, but the user started talking '
+                       'before any of your answer to it was spoken, so they have not heard it. It is the same '
+                       'single message, not a new or second one. Tell them now as if for the first time; '
+                       'don\'t say "again", "still", "same" or "came back".]')
+
+# a user-turn reply while an announcement was cut before the user heard it: deliver it in this reply
+ANNOUNCE_CARRY_NOTE = ('[Not told yet: the user started talking before you said anything about the message '
+                       'below, so they have not heard it. It is the same single message as before, not a new '
+                       'one. In this reply, answer what the user says now and tell them that outcome briefly, '
+                       'once, as news; don\'t say "again", "still", "same" or "came back".]')
+
+
 @dataclass
 class Reply:
     turn: Optional[int]
@@ -99,6 +112,7 @@ class Reply:
     # keeps going but plays nothing until that sound's transcript says whether it was words.
     held: Optional[asyncio.Event] = None
     held_gen: int = 0                              # the latest segment the reply waits on
+    carries: list = field(default_factory=list)    # unheard announcements this reply delivers
 
 
 @dataclass
@@ -125,6 +139,7 @@ class Orchestrator:
         self.reply: Optional[Reply] = None
         self.reply_task: Optional[asyncio.Task] = None
         self.pending_interrupt: Optional[Interrupted] = None
+        self.unheard: list[dict] = []                  # announcements cut before any content: {prompt, by: replies}
         self.tasks: set = set()
         self.user_turns: dict = {}
         self.replies: list[Reply] = []
@@ -500,6 +515,9 @@ class Orchestrator:
         if self.reply_task and not self.reply_task.done():
             self._cancel_reply(keep_record=True)
         r = Reply(label, full, decided_ms=early["t_ms"] if early else self.clock.ms)
+        r.carries = list(self.unheard)
+        for u in r.carries:
+            u["by"].append(r)
         if early is not None:
             r.fillers.append(early["filler"])
             r.sentences.append(early["filler"])
@@ -547,6 +565,9 @@ class Orchestrator:
         prompt = (f'[Already spoken aloud as the first words of this reply: "{said}" Do not repeat, echo or '
                   f'rephrase those words, and do not acknowledge again; otherwise reply as you normally '
                   f'would.] {r.user_text}') if said else r.user_text
+        if r.carries and not r.announce:
+            prompt = " ".join([ANNOUNCE_CARRY_NOTE] + [u["prompt"] for u in r.carries]
+                              + ["[What the user says now:]", prompt])
 
         async def produce():
             chunker = Chunker()
@@ -724,13 +745,30 @@ class Orchestrator:
         self._cancel_reply(keep_record=True)
 
     # -- announcements: speaking without a user turn ---------------------------
+    @staticmethod
+    def _heard(r: Reply) -> bool:
+        """Did the user hear (most of) a reply that carried an unheard announcement? Asked once
+        the conversation is free, so a barge-in during its playback is known."""
+        if not r.content_started:
+            return False
+        if not r.interrupted:
+            return True
+        return len((r.text_spoken or "").split()) >= 0.6 * max(1, len(r.text_generated.split()))
+
+
     def announce(self, prompt: str) -> asyncio.Task:
         """Speak a reply nobody asked for just now (a task handed to Claude Code finished).
 
         The brain gets `prompt` as a turn of its own once the conversation is free: the user
         is not talking, no reply is in flight, nothing plays, for announce_quiet_ms. The user
         can talk over it like over any reply. If the user starts talking before any of its
-        audio played, it is dropped and tried again when they are done."""
+        content played, it is dropped and tried again when they are done.
+
+        A dropped try stays in the brain's history (the claude process keeps the message), so a
+        retry sent as the same text reads like a second, repeated result ("came back again").
+        A retry therefore goes with ANNOUNCE_RETRY_NOTE: the user has not heard it, say it once.
+        Replies to the user in the meantime carry it (ANNOUNCE_CARRY_NOTE); once one of them was
+        heard, the announcement is delivered and not tried again."""
         return self._spawn(self._announce(prompt))
 
     def _free(self) -> bool:
@@ -738,6 +776,8 @@ class Orchestrator:
 
     async def _announce(self, prompt: str) -> None:
         quiet_s = float(self.ocfg["announce_quiet_ms"]) / 1000.0
+        attempt = 0
+        item: Optional[dict] = None
         while True:
             free_since = None
             while True:
@@ -749,17 +789,28 @@ class Orchestrator:
                 elif now - free_since >= quiet_s:
                     break
                 await asyncio.sleep(0.05)
-            r = Reply(None, prompt, decided_ms=self.clock.ms, announce=True)
+            if item is not None:
+                self.unheard = [u for u in self.unheard if u is not item]
+                if any(self._heard(x) for x in item["by"]):
+                    self.log.emit("x_announce_delivered", None, text=prompt[:200], attempt=attempt)
+                    return                       # a reply to the user already told them
+            text = prompt if attempt == 0 else ANNOUNCE_RETRY_NOTE + " " + prompt
+            attempt += 1
+            r = Reply(None, text, decided_ms=self.clock.ms, announce=True)
             self.reply = r
             self.replies.append(r)
             interrupted, self.pending_interrupt = self.pending_interrupt, None
             r.after_interrupt = interrupted is not None
-            self.log.emit("x_announce", None, text=prompt[:200])
+            self.log.emit("x_announce", None, text=prompt[:200], attempt=attempt)
             task = self._spawn(self._reply(r, interrupted, None))
             self.reply_task = task
             await asyncio.wait({task})
-            if r.audio_started or not task.cancelled():
+            # retry only if none of its content was heard (a keepalive line is not the content)
+            if r.content_started or not task.cancelled():
                 return
+            # not heard: the next replies to the user carry it, else it is tried again when free
+            item = {"prompt": prompt, "by": []}
+            self.unheard.append(item)
 
     # -- output --------------------------------------------------------------
     def transcript(self, scripts: Optional[dict] = None) -> dict:
