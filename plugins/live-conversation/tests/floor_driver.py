@@ -325,16 +325,19 @@ class Checker:
         """Rule 4, from ground truth: an interim with no words, or the turn_end with none."""
         return not s.words_interim and (s.seen or s.turn_end is not None)
 
-    def partition(self, question: str) -> Optional[list]:
-        """The word segments whose truths make up `question`, in segment order, or None."""
+    def partition(self, question: str, before: Optional[float] = None, exclude=()) -> Optional[list]:
+        """The word segments whose truths make up `question`, in segment order, or None. Only
+        segments final by `before` and not in `exclude` (two segments can say the same thing)."""
         words = _words_of(question)
-        segs = sorted((s for s in self.segs.values() if _words_of(self._truth(s.utt))), key=lambda s: s.order)
+        segs = sorted((s for s in self.segs.values() if _words_of(self._truth(s.utt)) and s.utt not in exclude
+                       and (before is None or (s.final is not None and s.final <= before))),
+                      key=lambda s: s.order)
         texts = [_words_of(self._truth(s.utt)) for s in segs]
 
         def fits(i: int, k: int) -> Optional[list]:
             if i == len(words):
                 return []
-            for j in range(k, len(texts)):
+            for j in reversed(range(k, len(texts))):     # a repeated text: the newest segment
                 w = texts[j]
                 if words[i:i + len(w)] == w:
                     rest = fits(i + len(w), j + 1)
@@ -498,9 +501,13 @@ class Checker:
             last[r.label] = r
         # I1 No lost question: every word segment is in the last question of a label. (That
         # reply drained, or words stopped it: I9 checks every stop.)
-        covered = set()
-        for r in last.values():
-            covered |= {s.utt for s in self.partition(r.question) or []}
+        # Each label's segments, labels in start order, so a repeated text goes to the right label.
+        claimed: dict = {}
+        used: set = set()
+        for lab, r in last.items():
+            claimed[lab] = self.partition(r.question, r.start, used) or []
+            used |= {s.utt for s in claimed[lab]}
+        covered = used
         errored = set()
         for r in answers:
             if r.error:
@@ -524,7 +531,9 @@ class Checker:
                 self.fail("I7", f"label {lab} has {len(mine)} turn_end_detected")
             heard = [r for r in answers if r.label == lab and r.first_content is not None]
             first = min(heard, key=lambda r: r.first_content) if heard else last[lab]
-            segs = self.partition(first.question) or []
+            mine_segs = {s.utt for s in claimed[lab]}
+            segs = [s for s in self.partition(first.question, first.start,
+                                              used - mine_segs) or []]
             want = max(segs, key=lambda s: s.order).turn_end if segs else None
             if mine[0].fields["t_ms"] != want:
                 self.fail("I7", f"label {lab} turn_end_detected t_ms {mine[0].fields['t_ms']} != {want}")
