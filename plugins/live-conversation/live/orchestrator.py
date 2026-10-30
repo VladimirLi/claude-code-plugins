@@ -70,6 +70,10 @@ DEFAULTS = {
     "warm_tts": True,
     # announce(): speak only after the conversation was free (no user speech, no reply) this long
     "announce_quiet_ms": 800.0,
+    # a reply held on sound after the turn (_hold) plays anyway after this long unless the sound's
+    # interim text had words: a wordless noise segment lasted 3-4 s in session 20261030-110521,
+    # and waiting for its end and final transcript cost 5 s of silence. 0 = wait for the final.
+    "hold_max_ms": 1500.0,
 }
 
 
@@ -115,6 +119,9 @@ class Reply:
     # keeps going but plays nothing until that sound's transcript says whether it was words.
     held: Optional[asyncio.Event] = None
     held_gen: int = 0                              # the latest segment the reply waits on
+    held_since: float = 0.0                        # session clock when the hold began
+    held_words: bool = False                       # an interim of the held sound had words
+    released_gen: int = -1                         # segment whose hold ran out (hold_max_ms) before its final
     carries: list = field(default_factory=list)    # unheard announcements this reply delivers
 
 
@@ -309,6 +316,11 @@ class Orchestrator:
             self.c.endpointer.on_transcript(text, False)
         except Exception:
             pass
+        r = self.reply
+        if r is not None and r.held is not None and not r.held_words:
+            norm = normalize(text)
+            if norm and not is_hesitation(norm):
+                r.held_words = True     # likely words: keep holding until the final says so
         if not self.in_user_turn or not self.ocfg["predict_filler"] or self._assistant_holds_floor():
             return                      # (a prefetch would queue in front of the reply's next sentence)
         full = (self.carry + " " + text).strip() if self.carry else text
@@ -486,7 +498,8 @@ class Orchestrator:
             self.c.endpointer.on_transcript(full, True)
             self.c.bargein.on_transcript(full)
         early = self._take_early(label)
-        held = self.reply if (self.reply is not None and self.reply.held is not None) else None
+        rr = self.reply
+        held = rr if (rr is not None and (rr.held is not None or rr.released_gen == gen)) else None
         if held is not None and early is None:
             norm = normalize(text)
             if not norm or is_hesitation(norm):
@@ -501,6 +514,12 @@ class Orchestrator:
             full = (held.user_text + " " + full).strip()
             if held.turn is not None and held.turn != label:
                 self.user_turns.pop(held.turn, None)
+            if held.audio_started:
+                # it began to play when its hold ran out (hold_max_ms): stop it, the brain hears what was said
+                spoken = self._spoken_so_far(held)
+                self.sink.flush(spoken_text=spoken)
+                held.interrupted, held.text_spoken = True, spoken
+                self.pending_interrupt = Interrupted(spoken)
             self._cancel_reply(keep_record=False)
             self.reply_task = None
         hold_gen = None
@@ -722,6 +741,8 @@ class Orchestrator:
         """Keep the reply going but play none of it until _release (see _on_speech_start)."""
         if r.held is None:
             r.held = asyncio.Event()
+            r.held_since = self.clock.ms
+            r.held_words = False
             self.log.emit("x_resume", r.turn, decision="hold")
         r.held_gen = self.gen if gen is None else gen
 
@@ -731,8 +752,23 @@ class Orchestrator:
             r.held = None
 
     async def _unheld(self, r: Reply) -> None:
+        """Wait out a hold. Past hold_max_ms with no words in the held sound's interim text, play:
+        noise can last seconds, and its final transcript only comes after it ends."""
+        cap = float(self.ocfg["hold_max_ms"])
         while r.held is not None:
-            await r.held.wait()
+            ev = r.held
+            left = (r.held_since + cap - self.clock.ms) / 1000.0
+            if cap <= 0 or r.held_words:
+                await ev.wait()
+            elif left <= 0:
+                self.log.emit("x_resume", r.turn, decision="released", held_ms=round(self.clock.ms - r.held_since))
+                r.released_gen = r.held_gen
+                self._release(r)
+            else:
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=min(left, 0.25))
+                except asyncio.TimeoutError:
+                    pass
 
     def _cancel_reply(self, keep_record: bool) -> None:
         r = self.reply

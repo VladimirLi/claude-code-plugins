@@ -324,12 +324,12 @@ class SeqSTT(FakeSTT):
         return self.texts.pop(0)
 
 
-def make_resume(texts, brain_delay=0.3):
+def make_resume(texts, brain_delay=0.3, hold_max_ms=1500.0):
     log = EventLog(Clock())
     audio = FakeAudio(log)
     c = Components(endpointer=Nop(), stt=SeqSTT(texts), brain=FakeBrain("The yes is for the fix.", delay=brain_delay),
                    tts=FakeTTS(0.01), bargein=Nop(), turntaking=TurnTaking({"fillers": False}))
-    return Orchestrator(audio, log, c, {"orchestrator": {"keepalive_after_ms": 0}}), log
+    return Orchestrator(audio, log, c, {"orchestrator": {"keepalive_after_ms": 0, "hold_max_ms": hold_max_ms}}), log
 
 
 class TestResumedNoise(unittest.TestCase):
@@ -394,6 +394,68 @@ class TestResumedNoise(unittest.TestCase):
             await o.reply_task
             self.assertTrue(r.content_started)
             self.assertEqual(len(o.c.brain.calls), 1)
+        asyncio.run(go())
+
+
+class TestHoldCap(unittest.TestCase):
+    """Replay of session 20261030-110521: wordless noise after "What are you doing?" lasted 3.3 s,
+    and the held reply waited for its end and final transcript: 5.4 s to first sound."""
+
+    def test_wordless_hold_plays_after_hold_max_ms(self):
+        async def go():
+            o, log = make_resume(["What are you doing?", ""], brain_delay=0.05, hold_max_ms=200.0)
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            o._on_speech_start()                     # noise goes on, its final is far away
+            o._on_interim("")
+            o.clock.advance(SR)                      # 1 s of mic audio (the session clock)
+            await asyncio.sleep(0.6)
+            self.assertTrue(r.audio_started)         # played without waiting for the final
+            self.assertTrue([e for e in log.events if e.event == "x_resume" and e.extra.get("decision") == "released"])
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)     # the noise had no words
+            await o.reply_task
+            self.assertIs(o.reply, r)
+            self.assertEqual(len(o.c.brain.calls), 1)
+            self.assertEqual(o.user_turns[r.turn], "What are you doing?")
+        asyncio.run(go())
+
+    def test_words_in_interim_keep_the_hold(self):
+        async def go():
+            o, log = make_resume(["What are you doing?", "Hello?"], brain_delay=0.05, hold_max_ms=200.0)
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            first = o.reply
+            o._on_speech_start()
+            o._on_interim("Hello")
+            o.clock.advance(SR)                      # 1 s of mic audio (the session clock)
+            await asyncio.sleep(0.6)
+            self.assertFalse(first.audio_started)    # words: still held past hold_max_ms
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            self.assertEqual(o.reply.user_text, "What are you doing? Hello?")
+            await o.reply_task
+        asyncio.run(go())
+
+    def test_words_after_release_stop_the_reply_and_merge(self):
+        async def go():
+            o, log = make_resume(["What are you doing?", "Hello?"], brain_delay=0.05, hold_max_ms=200.0)
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            first = o.reply
+            o._on_speech_start()
+            o.clock.advance(SR)                      # 1 s of mic audio (the session clock)
+            await asyncio.sleep(0.6)
+            self.assertTrue(first.audio_started)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)     # the sound was words after all
+            self.assertTrue(first.interrupted)
+            self.assertEqual(o.reply.user_text, "What are you doing? Hello?")
+            await o.reply_task
         asyncio.run(go())
 
 

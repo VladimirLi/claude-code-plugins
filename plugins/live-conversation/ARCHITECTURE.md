@@ -145,6 +145,9 @@ user makes a sound again before any reply audio, the reply is held (it keeps
 going, nothing plays). If that segment's transcript has words, the reply is
 cancelled and the two parts are merged into one turn; if not (noise, a breath),
 the held reply plays and is not restarted (`x_resume` hold / kept / merged).
+A hold lasts at most `hold_max_ms` (1.5 s) unless an interim transcript of the
+sound had words: then the reply plays (`x_resume` released). If the final still
+has words, the playing reply is stopped and the parts are merged.
 
 e2e wiring (see the module docstring): `build()` applies `E2E_OVERLAY` under each
 module section (a key in the config still wins), today the on-device endpointer
