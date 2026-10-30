@@ -721,6 +721,66 @@ class TestReviewFindings(FloorCase):
         self.assertEqual(starts[-1].carries, [])
         self.assertEqual([e.fields["prompt"] for _, e in sim.emits("x_announce_dropped")], ["Task 1 finished."])
 
+    def test_hold_reaching_content_is_never_a_barge_in(self):
+        # critic probe_hold: the held segment's tentative play reached content, then "got" / "got it"
+        sim = Sim(plans=LONG)
+        ask(sim)
+        sim.say(2, 1500, 3500, "got it", interims=[(2000, ""), (3300, "got")], truth="")
+        sim.detector(5500)                                     # a real barge-in 1.1 s after the play
+        sim.run()
+        self.assertEqual([e.fields["reason"] for _, e in sim.emits("barge_in_detected")], ["detector_open"])
+        self.assertIn(5500.0, [t for t, _ in sim.ops(F.Pause)])
+
+    def test_barge_in_on_a_new_blip_counts_while_a_hold_is_open(self):
+        # fuzz seed 279: segments joining during the tentative play kept the hold "open" forever
+        sim = Sim(plans=LONG)
+        ask(sim)
+        sim.say(2, 2000, 2100, "", turn_end_ms=2400, final_ms=4000)      # held; tentative at 3500
+        sim.say(3, 3700, 3800, "", turn_end_ms=4000, final_ms=3000)      # joins the set over content
+        sim.detector(4300)                                                # a new blip: a barge-in
+        sim.run()
+        self.assertEqual([t for t, _ in sim.emits("barge_in_detected")], [4300.0])
+        self.assertEqual(len(sim.emits("playback_resumed")), 1)
+
+    def test_content_after_a_keepalive_restarts_the_short_timer(self):
+        # fuzz seed 51: the timer stayed at keepalive + 9 s although content played after it
+        plan = Plan(pieces=[("Found the logs.", 1000), ("And the errors.", 1000)], first_ms=5000, gap_ms=9000,
+                    done_ms=30000)
+        sim = Sim(plans=plan)
+        ask(sim)                                               # keepalive 6400 plays 6620-7420
+        sim.run()                                              # then "Found the logs." to 8380
+        kas = [t for t, _ in sim.ops(F.Keepalive)]
+        self.assertEqual(kas[:2], [6400.0, 8380.0 + 4500])     # not 6400 + 9000
+
+    def test_backchannel_just_after_the_reply_ends_is_over_heard(self):
+        sim = Sim()
+        ask(sim)                                               # drains about 5220
+        sim.say(2, 5600, 5900, "okay", truth="")               # within echo_lead_ms of its end
+        sim.run()
+        self.assertOneAnswer(sim)
+
+    def test_reply_end_unducks(self):
+        sim = Sim()
+        ask(sim)
+        sim.detector(2600, "duck")                             # ducked, never resumed
+        sim.say(2, 2600, 3200, "stop show the errors", interims=[(3100, "stop show")])
+        sim.run()
+        self.assertEqual([a.rid for _, a in sim.ops(F.Unduck)], ["r1"])   # the ducked reply, at its stop
+
+    def test_paused_gap_is_not_heard_content(self):
+        # fuzz seed 1216: a piece's played span ran across the pause once the tentative play resumed it
+        sim = Sim(plans=LONG)
+        ask(sim)
+        sim.detector(2600)
+        sim.say(2, 2640, 2700, "", turn_end_ms=3000, final_ms=3000)      # holds until 6000
+        sim.say(3, 3300, 3500, "okay", interims=[(4000, "")], turn_end_ms=5300, final_ms=300)
+        # tentative replay at 4800 (G3's cap); G3 said "okay" in the silence before it
+        sim.run()
+        self.assertEqual(sim.questions(), [Q1, "okay"])         # words, not a backchannel over content
+
+    def test_hum_before_a_hallucination_is_no_words(self):
+        self.assertEqual(F.make_meaningful()("Hmm, thank you.", []), "")
+
     def test_played_while_paused_is_ignored(self):
         f = F.Floor()
         f.on(F.SpeechStart(1, "u1", t_ms=0))

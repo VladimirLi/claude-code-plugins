@@ -88,10 +88,11 @@ One new module, `live/floor.py`: a pure, synchronous state machine.
      that played window is echo too, whatever its length. For the replay of an old recording, use
      the recorded `x_reply_text` of replies whose span (from their `first_reply_audio` to their
      stop or end; orchestrator.py:771 logs no span) overlaps the window.
-  2. Remove it if it is in `STT_HALLUCINATIONS` ("You", "Thank you.", "Thanks for watching.",
-     "We'll see you next time.", ...), unless an earlier interim of the segment had other words.
-  3. Remove hum and hesitation tokens (`_HUMS`, which gains `mmmm` through the same `normalize`
+  2. Remove hum and hesitation tokens (`_HUMS`, which gains `mmmm` through the same `normalize`
      folding, and `is_hesitation`).
+  3. Remove it if what is left is in `STT_HALLUCINATIONS` ("You", "Thank you.", "Thanks for
+     watching.", "We'll see you next time.", ...), unless an earlier interim of the segment had
+     other words. *(Step 3b: hums go first, so "Hmm, thank you." is a hallucination too.)*
 - **Over heard content**: fixed per segment at its `turn_end`. A segment is over heard content if
   any of these holds:
   - reply content audio played between 0.5 s before its start and its speech end,
@@ -204,6 +205,10 @@ The word boundary is estimated from the piece's length, because the TTS gives no
 1. **Before heard content, sound holds.** While the reply has no heard content, a new segment adds
    its id to the gate's pause set (`cause = hold`). Nothing plays until the set is empty or rule 4
    allows a tentative play. Holds never count toward `nowords_pauses` or `resume_guard_ms`.
+   *Note (step 3b): "a hold" is the held segment, not the episode: a pause by a held segment (its
+   interim words during the tentative play) is part of its hold; a detector or interim pause on a
+   new blip or segment over heard content counts as a barge-in, whatever else is still held. Else
+   sounds every 1-2 s keep a hold alive and the 2-pause limit never applies (fuzz seed 279).*
 2. **During heard content, interruptions pause at once.**
    - A new `speech_start` while the gate is paused adds the segment to the pause set. During a
      tentative play it also joins the set, and play continues.
@@ -322,6 +327,9 @@ The word boundary is estimated from the piece's length, because the TTS gives no
   emit it.
 - A pause emits `barge_in_detected` (for `cause = barge_in`) and `playback_paused`. A pause that
   ends with no words emits `playback_resumed`. A stop emits `playback_stopped`, once.
+  *Note (step 3b): once per pause episode (until the pause set empties): a stop after the
+  episode's tentative play emits nothing new, so each `playback_paused` pairs with one
+  `playback_resumed` or `playback_stopped`.*
 - piece_metrics: `flush_delay_ms` is measured to `playback_paused` or `playback_stopped`, whichever
   is first. `false_barge_in` is a pause that ends in `playback_resumed`.
 - score.py `dead_air_ms` keeps counting paused time: a pause on noise is silence the user hears.

@@ -77,10 +77,8 @@ def make_meaningful(speakers: bool = False, hallucinations=None) -> Callable:
     def meaningful(text: str, played=(), earlier_words: bool = False) -> str:
         tokens = fold_hums(normalize(text or "")).split()
         kept = _echo_free(tokens, list(played), speakers)
-        if not kept or (" ".join(kept) in hallucinations and not earlier_words):
-            return ""
         kept = [w for w in kept if w not in HUMS and not is_hesitation(w)]
-        if not kept:
+        if not kept or (" ".join(kept) in hallucinations and not earlier_words):
             return ""
         return text.strip() if kept == tokens else " ".join(kept)
 
@@ -337,6 +335,7 @@ class PlayedSpan:
     t_start_ms: float
     t_end_ms: float
     text: str
+    open: bool = True             # still playing: a pause ends the span, the next play starts one
 
 
 @dataclass
@@ -370,6 +369,7 @@ class Reply:
     cause: Optional[str] = None  # hold | barge_in, from the first entry into the pause set
     since_ms: Optional[float] = None
     episode_paused: bool = False  # this pause episode stopped heard audio (playback_paused)
+    holds: set = field(default_factory=set)   # rule 1 members: segments held before heard content
     ducked_on: set = field(default_factory=set)
     detector_ducked: bool = False
     resumed_ms: Optional[float] = None
@@ -379,6 +379,7 @@ class Reply:
     drained: bool = True         # nothing queued or buffered at the gate
     ka_heard: bool = False       # a keepalive played with the gate open
     sound_ms: float = 0.0        # last play or content audio, for the keepalive timer
+    play_ms: float = 0.0         # the last play action: a played span after a pause starts here
     ka_sent_ms: Optional[float] = None
 
 
@@ -467,10 +468,11 @@ class Floor:
         r = self.reply
         if r is None:
             return
-        cause = "barge_in" if r.heard == "content" else "hold"
+        # A held segment's own words stay part of its hold (rule 1), even after content played.
+        cause = "barge_in" if r.heard == "content" and seg.g not in r.holds else "hold"
         if seg.g in r.pause_on:
             if r.gate == "tentative":
-                self._close_gate(cause, "interim_words")   # rule 4: words pause again at once
+                self._close_gate(cause, "interim_words", g=seg.g)   # rule 4: words pause again at once
             return
         # Rule 2, both modes: interim words pause at once; the guard and the limit never block it.
         # It pauses even when the segment is not over heard content (I5), and does not set
@@ -589,9 +591,12 @@ class Floor:
             return
         p.played_ms = max(p.played_ms, float(ev.ms))
         r.offset = (ev.piece, float(ev.ms))
-        span = next((s for s in self.played if s.rid == r.rid and s.piece == ev.piece), None)
+        span = next((s for s in self.played if s.rid == r.rid and s.piece == ev.piece and s.open), None)
         if span is None:
-            self.played.append(PlayedSpan(r.rid, ev.piece, p.kind, self.now - ev.ms, self.now, p.text))
+            # A span is one stretch of sound: after a pause it starts again at the play, not at
+            # the piece's start, so the paused gap never counts as heard.
+            start = max(self.now - ev.ms, r.play_ms)
+            self.played.append(PlayedSpan(r.rid, ev.piece, p.kind, start, self.now, p.text))
             self.played = [s for s in self.played if s.t_end_ms >= self.now - 60000]
         else:
             span.t_end_ms = self.now
@@ -688,7 +693,7 @@ class Floor:
         r = self.reply
         if r is None:
             return
-        for s in (r.pause_on, r.ducked_on, r.segs):
+        for s in (r.pause_on, r.ducked_on, r.segs, r.holds):
             if blip.g in s:
                 s.discard(blip.g)
                 s.add(seg.g)
@@ -719,7 +724,7 @@ class Floor:
         tail = at[-1] if at else (max(recent, key=lambda s: s.t_end_ms) if recent else None)
         if tail is None or not tail.text.rstrip().endswith("?"):
             return False
-        return not any(s is not tail and tail.t_start_ms < s.t_start_ms <= end for s in content)
+        return not any(s.piece != tail.piece and tail.t_start_ms < s.t_start_ms <= end for s in content)
 
     # -- the gate --------------------------------------------------------------------------------
     def _hold_on(self, seg: Seg, cause: str, reason: str, stop_tentative: bool = False) -> None:
@@ -731,6 +736,8 @@ class Floor:
         if not r.pause_on:
             r.cause, r.since_ms, r.episode_paused = cause, self.now, False
         r.pause_on.add(seg.g)
+        if cause == "hold":
+            r.holds.add(seg.g)
         if r.gate == "open" or (r.gate == "tentative" and stop_tentative):
             self._close_gate(cause, reason, g=seg.g)
         else:
@@ -742,12 +749,19 @@ class Floor:
             r.since_ms = self.now                   # audio stops again now: the rewind counts from here
         r.gate = "paused"
         self.out.append(Pause(r.rid))
+        for s in self.played:
+            if s.rid == r.rid:
+                s.open = False
         for name, p in r.pieces.items():
             if p.kind == "keepalive" and p.played_ms < p.dur_ms:
                 p.dur_ms = p.played_ms              # rule 8: a paused keepalive is dropped
                 self.out.append(Drop(r.rid, name))
         self._floor("pause", reason, g=g, trigger=trigger)
-        if trigger == "barge_in" and r.heard == "content":
+        # Rule 1: a hold is never a barge-in, even when its tentative play reached content: a
+        # pause by a held segment gets no metrics, no guard and no limit count. A barge-in on a new
+        # blip or segment over heard content counts, whatever else is still held. One episode emits
+        # one pause: a stop after its tentative play is not a second one.
+        if trigger == "barge_in" and r.heard == "content" and not r.episode_paused:
             r.episode_paused = True
             self._emit("barge_in_detected", r.label, reason=reason)
             self._emit("playback_paused", r.label, reason=reason)
@@ -775,6 +789,7 @@ class Floor:
         elif all(self._quiet(self.segs[g]) for g in r.pause_on):
             self._cancel_timer("cap")
             r.gate = "tentative"
+            r.play_ms = self.now
             self.out.append(Play(r.rid, self._rewind(r)))
             self._floor("play", "cap_tentative", on=sorted(r.pause_on))
             r.sound_ms = self.now
@@ -795,6 +810,7 @@ class Floor:
         r.gate, r.cause, r.since_ms = "open", None, None
         self._cancel_timer("cap")
         if was == "paused":
+            r.play_ms = self.now
             self.out.append(Play(r.rid, rewind))
             r.sound_ms = self.now                   # rule 8: the keepalive timer restarts on play
         self._floor("play" if was == "paused" else "open", "pause_set_empty")
@@ -1000,8 +1016,11 @@ class Floor:
         if r is not None:
             self._gate(r)
             if r.brain == "running" and r.gate == "open":
-                if "keepalive" not in self.timers:
-                    self._set_timer("keepalive", max(self.now, self._keepalive_at(r)))
+                # Move the timer only earlier (content after a keepalive restarts the 4.5 s); a
+                # later due is re-read when it fires, so content audio sets no timer per frame.
+                due = max(self.now, self._keepalive_at(r))
+                if "keepalive" not in self.timers or due < self.timers["keepalive"]:
+                    self._set_timer("keepalive", due)
             else:
                 self._cancel_timer("keepalive")
         if self._floor_free() and any(a.state == "queued" for a in self.announcements):
