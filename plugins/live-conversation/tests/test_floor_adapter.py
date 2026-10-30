@@ -125,6 +125,56 @@ class TestPause(unittest.TestCase):
         self.assertEqual(events(log, "playback_paused"), [])  # a hold is no barge-in
 
 
+class TestRewindAndDuck(unittest.TestCase):
+    def test_long_pause_rewinds_to_a_word_start(self):
+        s = Script()
+        s.replies = {"": "One two three four five six seven eight."}
+        s.segment(100, 1100, Q1)                   # the piece plays from about 2350 (8 words, 2.4 s)
+        s.detector(3500, "barge_in", "open")       # pause about 1.15 s in
+        s.segment(3540, 3700, "", final_ms=1200)   # absorbs the blip; '' at about 5500: 2 s pause
+        o, log = run(s)
+        play = [e for e in events(log, "x_floor") if e.extra.get("act") == "play"]
+        self.assertTrue(play)
+        h = heard(o)
+        piece = speech("One two three four five six seven eight.")
+        played = h[h != 0].astype(np.int64)
+        d = np.diff(played)
+        jumps = np.nonzero((d != 1) & (d != -19999))[0]       # the ramp wraps every 20000 samples
+        self.assertEqual(len(jumps), 1)                        # played once more from one point
+        pause_at = int(jumps[0]) + 1                           # samples of the piece before the pause
+        back = int((played[jumps[0]] - played[jumps[0] + 1] + 1) % 20000)
+        restart = pause_at - back
+        word = len(piece) // 8
+        self.assertEqual(restart % word, 0)                    # a word start
+        self.assertGreater(back, 0)
+        self.assertLessEqual(back, 500 * 24 + word)            # 500 ms, moved back to the word start
+        self.assertEqual(len(played), len(piece) + back)       # nothing else lost or repeated
+
+    def test_duck_sets_the_sink_gain_while_ducked(self):
+        s = Script(brain_ms=300)
+        s.replies = {"": "One two three four five six seven eight."}
+        s.segment(100, 1100, Q1)
+        s.detector(2700, "duck", "onset")
+        s.detector(3100, "resume", "ended")
+        o, log = make(s)
+        gains = []
+
+        async def go():
+            await o.start()
+
+            async def watch():
+                while True:
+                    gains.append((o.clock.ms, o.sink.gain_db))
+                    await asyncio.sleep(0)
+            w = asyncio.ensure_future(watch())
+            await o.run()
+            w.cancel()
+            await o.close()
+        asyncio.run(go())
+        self.assertIn(-12.0, [g for t, g in gains if 2700 <= t < 3100])
+        self.assertEqual([g for t, g in gains if t > 3200][-1], 0.0)
+
+
 class TestStaleCallbacks(unittest.TestCase):
     def test_a_stopped_reply_never_reaches_the_sink(self):
         s = Script(brain_gap_ms=1500)              # the old reply keeps producing after its stop

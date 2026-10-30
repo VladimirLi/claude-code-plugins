@@ -13,7 +13,8 @@ and carries out the actions live/floor.py returns:
   order), then the sink's position (`played`, `drained`) and the controller's timers, on clock.ms.
 - replies: `start_reply` runs the brain and a TTS pipeline; each synthesized sentence is a piece
   (`tts_piece`), kept whole so a pause can play it again from where it stopped. While the gate is
-  paused pieces are buffered, not written.
+  paused pieces are buffered, not written. `play` writes again from the pause point less the
+  controller's rewind, moved back to a word start; `duck` lowers the sink's gain.
 - stale callbacks: anything from a reply that is not the current one is dropped before it reaches
   the controller or the sink.
 """
@@ -84,6 +85,7 @@ class FloorAdapter:
         for k in _FLOOR_KEYS:
             if k in ocfg:
                 fcfg.setdefault(k, ocfg[k])
+        self.duck_db = float(fcfg.pop("duck_db", -12.0))      # the sink's gain while ducked
         self.floor = F.Floor(fcfg)
         self.clock = log.clock
         self.sink = audio.sink
@@ -257,7 +259,10 @@ class FloorAdapter:
             self.timers.pop(a.name, None)
         elif isinstance(a, F.Emit):
             self._emit(a)
-        # Duck and Unduck: step 4b
+        elif isinstance(a, F.Duck):
+            self.sink.gain_db = self.duck_db
+        elif isinstance(a, F.Unduck):
+            self.sink.gain_db = 0.0
 
     def _emit(self, a) -> None:
         fields = dict(a.fields)
@@ -395,7 +400,17 @@ class FloorAdapter:
             reset()
 
     def _rewind_samples(self, r: _Reply, idx: int, smp: int, rewind_ms: float) -> int:
-        return 0                                   # step 4a: play on from the pause point
+        """How far back to start: `rewind_ms` before the pause point, moved back to a word start.
+        The TTS gives no word timings, so words are spread evenly over the piece (as the old
+        _spoken_so_far did)."""
+        if rewind_ms <= 0 or idx >= len(r.pieces):
+            return 0
+        p = r.pieces[idx]
+        target = max(0, smp - int(rewind_ms * SR / 1000))
+        n = max(1, len(p.text.split()))
+        word = len(p.pcm) / n
+        start = int(int(target / word) * word)
+        return smp - start
 
     def _drop(self, r: _Reply, name: str) -> None:
         i = next((i for i, p in enumerate(r.pieces) if p.name == name), None)
