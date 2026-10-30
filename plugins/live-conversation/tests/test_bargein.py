@@ -116,7 +116,7 @@ class TestRules(unittest.TestCase):
     def test_speech_soon_after_resume_barges_in(self):
         bi = BargeIn()
         dec = run(bi, np.concatenate([noise(500), hum(300), noise(500), hum(200), noise(500)]))
-        self.assertEqual(kinds(dec), ["duck", "resume", "barge_in"])
+        self.assertEqual(kinds(dec), ["duck", "resume", "duck", "barge_in"])   # stop after rejoin_burst_min_ms
 
     def test_fires_once(self):
         bi = BargeIn()
@@ -138,6 +138,19 @@ class TestRules(unittest.TestCase):
         run(bi, x)
         bi.on_transcript("Wait, what about merge?")
         self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["barge_in"])
+
+    def test_empty_transcript_resumes(self):
+        # live session: noise the STT heard no words in stopped the reply
+        bi = BargeIn()
+        run(bi, np.concatenate([noise(500), hum(200)]))
+        bi.on_transcript("")
+        self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["resume"])
+
+    def test_short_sound_after_resume_does_not_barge_in(self):
+        # live session: 40 ms of echo within rejoin_ms of a resume stopped the reply
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(500), hum(300), noise(500), hum(60), noise(500)]))
+        self.assertNotIn("barge_in", kinds(dec))
 
     def test_reply_starting_over_the_user_stops_at_once(self):
         bi = BargeIn()

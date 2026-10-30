@@ -73,6 +73,7 @@ DEFAULTS = {
     "burst_gap_ms": 140.0,     # a gap this long splits bursts
     "first_burst_min_ms": 100.0,  # the first burst must be this long for the burst rule
     "burst_min_ms": 40.0,      # the second burst must be this long
+    "rejoin_burst_min_ms": 150.0,  # same, after a "resume" (40 ms of echo there stopped a reply live)
     "end_ms": 350.0,           # silence that closes an episode -> "resume"
     "carry_gap_ms": 60.0,      # user speech ongoing (gap <= this) when a reply starts -> judge it at once
     "rejoin_ms": 800.0,        # speech this soon after a "resume" continues the same turn (burst rule)
@@ -149,6 +150,7 @@ class BargeIn:
         self.bursts = 0
         self.burst_ms = 0.0            # length of the current burst
         self.first_burst_ms = 0.0
+        self.rejoined = False          # this episode continues one that resumed
         self.open_n = 0
         self.fric_n = 0
         self.ducked = False
@@ -158,7 +160,9 @@ class BargeIn:
     def on_transcript(self, text: str) -> None:
         if not self.active or self.fired:
             return
-        self._pending = "resume" if is_backchannel(text) else "barge_in"
+        # no words: noise or echo the STT heard nothing in (live session: 1 of 2 false barge-ins)
+        words = re.search(r"\w", text or "")
+        self._pending = "resume" if not words or is_backchannel(text) else "barge_in"
 
     # -- per frame ---------------------------------------------------------
     def _is_speech(self, f: dict) -> tuple[bool, bool, bool]:
@@ -189,7 +193,7 @@ class BargeIn:
             self.bursts = 1
             if self._resumed and t_ms - self._resumed[0] <= c["rejoin_ms"]:
                 # more speech right after a short sound: the user is still going ("no, ... I meant")
-                self.bursts, self.first_burst_ms = 2, self._resumed[1]
+                self.bursts, self.first_burst_ms, self.rejoined = 2, self._resumed[1], True
             self._resumed = None
         if speech:
             if self.gap_ms >= c["burst_gap_ms"]:
@@ -219,8 +223,9 @@ class BargeIn:
             return "open"
         if self.fric_n >= c["fric_frames"] and has_voice:
             return "fric"
+        burst_min = c["rejoin_burst_min_ms"] if self.rejoined else c["burst_min_ms"]
         if (self.bursts >= 2 and self.first_burst_ms >= c["first_burst_min_ms"]
-                and self.burst_ms >= c["burst_min_ms"] and has_voice):
+                and self.burst_ms >= burst_min and has_voice):
             return "burst"
         if self.voiced_ms >= c["long_ms"]:
             return "long"
