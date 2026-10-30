@@ -178,7 +178,8 @@ class Orchestrator:
         await asyncio.gather(synth_heads(), warm_probe())
 
     def _interjections(self) -> list[str]:
-        return self._filler_heads() + (KEEPALIVE if self.ocfg["keepalive_after_ms"] else [])
+        fillers = getattr(self.c.turntaking, "cfg", {}).get("fillers", True)     # off: no filler to warm (~2.4 s)
+        return (self._filler_heads() if fillers else []) + (KEEPALIVE if self.ocfg["keepalive_after_ms"] else [])
 
     def _filler_heads(self) -> list[str]:
         from . import turntaking as ttm

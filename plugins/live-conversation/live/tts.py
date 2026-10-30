@@ -36,6 +36,8 @@ Config (`cfg["tts"]`), all optional:
     lead_frames cap on the leading pad token frames  default none (capping hurts the first word)
     threads     torch CPU threads                    default 8
     prewarm     synthesize OPENERS at start (cache)  default true
+    prewarm_dir saved OPENERS audio, reused next start  default ~/.claude/live-conversation/tts-cache
+                (keyed by this file, kokoro's version and the config; "" turns it off)
     cache_size  short pieces kept in the audio cache default 256
     cache_max_words  longest piece that is cached    default 3
     level_dbfs  active speech RMS target             default -18
@@ -48,6 +50,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
+import json
 import os
 import re
 import sys
@@ -234,12 +238,60 @@ class KokoroTTS:
                   "then we can see what is left and decide together."):
             for _ in self._gen(t):
                 pass
-        if self.cfg.get("prewarm", True):
+        if self.cfg.get("prewarm", True) and not self._load_openers():
             for t in OPENERS:
                 self._cached(t)
+            self._save_openers()
         if self.bucket and self.cfg.get("warm_buckets", True):
             for n in range(self.bucket * 2, int(self.cfg.get("warm_max_frames", 320)) + 1, self.bucket):
                 self._decode_frames(n)
+
+    # Synthesizing OPENERS took ~14 s of a ~28 s start (measured); the saved audio loads in well under 1 s.
+    def _openers_path(self) -> Optional[str]:
+        d = self.cfg.get("prewarm_dir", os.path.expanduser("~/.claude/live-conversation/tts-cache"))
+        if not d:
+            return None
+        try:
+            from importlib.metadata import version
+            kv = version("kokoro")
+        except Exception:
+            kv = "?"
+        with open(__file__, "rb") as f:
+            h = hashlib.sha256(f.read())
+        h.update(json.dumps([kv, self.voice, self.speed, self.pauses, self.shape_kw, self.fdev, self.ddev,
+                             self.bucket, self.cfg.get("lead_frames")], sort_keys=True).encode())
+        return os.path.join(d, f"openers-{h.hexdigest()[:16]}.npz")
+
+    def _load_openers(self) -> bool:
+        p = self._openers_path()
+        if not p or not os.path.exists(p):
+            return False
+        try:
+            with np.load(p, allow_pickle=False) as z:
+                counts = json.loads(str(z["index"]))
+                cache = OrderedDict((t.lower(), [z[f"{i}_{j}"] for j in range(n)])
+                                    for i, (t, n) in enumerate(counts))
+        except Exception:
+            return False                    # damaged file: synthesize again and overwrite it
+        self.cache.update(cache)
+        return True
+
+    def _save_openers(self) -> None:
+        p = self._openers_path()
+        if not p:
+            return
+        arrays, counts = {}, []
+        for i, t in enumerate(OPENERS):
+            segs = self.cache.get(t.lower(), [])
+            counts.append((t, len(segs)))
+            arrays.update({f"{i}_{j}": a for j, a in enumerate(segs)})
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = p + ".tmp.npz"
+            np.savez(tmp, index=json.dumps(counts), **arrays)
+            os.replace(tmp, p)
+        except OSError:
+            pass                            # no cache: the next start synthesizes again
 
     def _decode_frames(self, n: int) -> None:
         """Run the decoder once on n frames of silence-like input (compiles that shape on MPS)."""
