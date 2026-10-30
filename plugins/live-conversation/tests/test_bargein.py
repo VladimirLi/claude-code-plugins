@@ -245,7 +245,8 @@ class TestAfterInterruptMetric(unittest.TestCase):
 
 class TestBackchannelText(unittest.TestCase):
     def test_words(self):
-        for t in ["Mm-hmm.", "Mhm.", "mm hmm", "Uh-huh", "Yeah.", "okay, right", "Hmm."]:
+        for t in ["Mm-hmm.", "Mhm.", "mm hmm", "Uh-huh", "Yeah.", "okay, right", "Hmm.", "Mmmm.", "Hmmm.",
+                  "Aha.", "Mmhmm.", "go ahead", "makes sense", "yeah yeah okay right sure"]:
             self.assertTrue(is_backchannel(t), t)
         for t in ["Wait, wait, how is that different from merge?", "Actually, just give me the short version.",
                   "No, I meant undo it", "", "stop"]:

@@ -487,3 +487,75 @@ class TestPromptEcho(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUtteranceIds(unittest.TestCase):
+    """The floor controller binds finals and interims to the utterance begin() returned."""
+
+    def test_finals_by_id_in_any_order(self):
+        async def go():
+            s = FakeSTT()
+            await feed(s, [QUIET] * 20)
+            a = s.begin()
+            await feed(s, [LOUD] * 10 + [QUIET] * 20)
+            b = s.begin()
+            await feed(s, [LOUD] * 25 + [QUIET] * 10)
+            await asyncio.sleep(0.1)
+            tb = await s.final_for(b)                   # the newer one first
+            ta = await s.final_for(a)
+            return a, b, ta, tb, await s.final_for(a)
+        a, b, ta, tb, again = run(go())
+        self.assertEqual(b, a + 1)
+        self.assertEqual(ta[0], "w10")
+        self.assertEqual(tb[0], "w25")
+        self.assertEqual(again, ("", "gone"))
+
+    def test_a_late_final_is_never_dropped(self):
+        async def go():
+            events = []
+            s = FakeSTT({"late_final_s": 0.05})
+            s.on_event = lambda n, f: events.append(n)
+            await feed(s, [QUIET] * 20)
+            a = s.begin()
+            await feed(s, [LOUD] * 10 + [QUIET] * 20)
+            b = s.begin()
+            await feed(s, [LOUD] * 25 + [QUIET] * 10)
+            await asyncio.sleep(0.2)                    # past late_final_s
+            return await s.final_for(a), await s.final_for(b), events
+        ta, tb, events = run(go())
+        self.assertEqual(ta[0], "w10")
+        self.assertEqual(tb[0], "w25")
+        self.assertNotIn("x_stt_dropped", events)
+
+    def test_interims_carry_their_id(self):
+        async def go():
+            s = FakeSTT({"interim_ms": 200}, delay=0.02)
+            got = []
+            s.on_interim_utt = lambda u, t: got.append((u, t))
+            await feed(s, [QUIET] * 20)
+            u = s.begin()
+            await feed(s, [LOUD] * 40 + [QUIET] * 6, realtime=True)
+            await asyncio.sleep(0.1)
+            await s.final_for(u)
+            return u, got
+        u, got = run(go())
+        self.assertTrue(got)
+        self.assertEqual({x for x, _ in got}, {u})
+
+    def test_base_stt_ids(self):
+        class Base(BaseSTT):
+            def _transcribe(self, audio, prompt=None):
+                return f"n{len(audio) // FRAME}"
+
+        async def go():
+            s = Base({"preroll_ms": 0})
+            a = s.begin()
+            for _ in range(10):
+                s.feed(LOUD)
+            b = s.begin()
+            for _ in range(20):
+                s.feed(LOUD)
+            return await s.final_for(b), await s.final_for(a)
+        tb, ta = run(go())
+        self.assertEqual(ta, ("n10", "base"))
+        self.assertEqual(tb, ("n20", "base"))

@@ -86,6 +86,20 @@ class TestEndpointer(unittest.TestCase):
         out = run(ep, [("speech", 200), ("quiet", 200)])
         self.assertEqual([k for k, *_ in out], ["speech_start", "turn_end"])
 
+    def test_turn_end_says_where_the_speech_stopped(self):
+        ep = make("What time is it?")
+        ends = []
+        t = 0.0
+        for kind, ms in [("quiet", 400), ("speech", 1000), ("quiet", 1500)]:
+            for _ in range(int(ms / 20)):
+                t += 20
+                ends += [d for d in ep.feed(LOUD if kind == "speech" else QUIET, t) if d.kind == "turn_end"]
+                time.sleep(0.002)
+        self.assertEqual(len(ends), 1)
+        self.assertIsNotNone(ends[0].pause_start_ms)
+        self.assertLess(abs(ends[0].pause_start_ms - 1420), 41)     # the first quiet frame
+        self.assertLess(ends[0].pause_start_ms, ends[0].t_ms)
+
     def test_question_ends_fast(self):
         ep = make("What time is it?")
         out = run(ep, [("quiet", 400), ("speech", 1000), ("quiet", 1500)], frame_sleep=0.002)

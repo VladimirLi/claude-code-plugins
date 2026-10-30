@@ -86,10 +86,6 @@ DEFAULTS = {
     "highpass_hz": 80.0,       # mic high-pass before all features (0 = off): below any voice's pitch
 }
 
-BACKCHANNEL_RE = re.compile(
-    r"^(?:(?:mm+|m+|hmm+|hm+|mhm+|mm-?hm+|uh-?huh|uh+-?hu+h|yeah|yep|yup|yes|ok(?:ay)?|right|sure|"
-    r"i see|got it|cool|nice|wow|oh|ah|aha|uh|um)[\s,.!?-]*)+$")
-
 _NFFT = 1024
 _FREQS = np.fft.rfftfreq(_NFFT, 1.0 / SR)
 _BAND_ALL = _FREQS >= 60.0
@@ -99,9 +95,10 @@ _LAG_LO, _LAG_HI = int(SR / 400), int(SR / 70)
 
 
 def is_backchannel(text: str) -> bool:
-    """True if a transcript is only a backchannel ("Mm-hmm.", "yeah", "okay, right")."""
-    t = text.strip().lower()
-    return bool(t) and bool(BACKCHANNEL_RE.match(t))
+    """True if a transcript is only a backchannel ("Mm-hmm.", "yeah", "okay, right"). One list for
+    every caller: turntaking's (FLOOR-SPEC.md, "one backchannel test")."""
+    from .turntaking import is_backchannel as tt_is_backchannel, normalize
+    return tt_is_backchannel(normalize(text or ""))
 
 
 def frame_features(frame: np.ndarray, prev: Optional[np.ndarray] = None) -> dict:

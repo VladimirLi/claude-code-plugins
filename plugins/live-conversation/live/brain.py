@@ -136,6 +136,7 @@ def is_handoff(name: str, tool_input: str) -> bool:
 @dataclass
 class Interrupted:
     spoken_text: str
+    question: str = ""          # what the user had asked, when the reply to it was cut
 
 
 DEFAULTS = {
@@ -666,7 +667,13 @@ class Brain:
             parts = [f'the user said "{u}" and you answered "{a}"' if a else f'the user said "{u}" and you said nothing yet'
                      for u, a in missed[-4:]]
             notes.append("[Context: replies from you that are not in your history yet: " + "; then ".join(parts) + ".]")
-        if interrupted is not None:
+        if interrupted is not None and interrupted.question.strip():
+            heard = interrupted.spoken_text.strip()
+            notes.append(f'[You were answering: "{interrupted.question.strip()}". The user heard only: '
+                         f'"{heard}", then interrupted.]' if heard else
+                         f'[You were answering: "{interrupted.question.strip()}". The user interrupted '
+                         f'before you said anything.]')
+        elif interrupted is not None:
             heard = interrupted.spoken_text.strip()
             notes.append(f'[The user interrupted you. They heard only: "{heard}"]' if heard
                          else "[The user interrupted you before you said anything]")

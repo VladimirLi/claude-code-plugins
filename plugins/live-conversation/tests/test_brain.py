@@ -355,3 +355,16 @@ class TestRaceSkipsThinking(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInterruptedQuestion(unittest.TestCase):
+    def test_question_is_told(self):
+        from live.brain import Brain, Interrupted, _Session  # noqa: F401
+        b = Brain()
+        msg = b._message(object(), "and now?", Interrupted("Git rebase takes", question="what is rebase"))
+        self.assertIn('You were answering: "what is rebase"', msg)
+        self.assertIn('"Git rebase takes"', msg)
+        msg = b._message(object(), "x", Interrupted("", question="q"))
+        self.assertIn("before you said anything", msg)
+        msg = b._message(object(), "x", Interrupted("heard"))
+        self.assertIn('They heard only: "heard"', msg)

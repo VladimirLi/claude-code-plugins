@@ -99,6 +99,15 @@ def echoes_prompt(text: str, prompt: Optional[str]) -> bool:
     return p[len(p) - len(w):] == w and (len(w) >= 3 or len(w) == len(p))
 
 
+# What Whisper-family models write for noise, breath or silence. A final that is only one of
+# these is not words (FLOOR-SPEC.md, "Words"). Compared after turntaking.normalize.
+STT_HALLUCINATIONS = {
+    "you", "thank you", "thanks", "thank you very much", "thanks for watching", "thank you for watching",
+    "thank you so much for watching", "we'll see you next time", "see you next time", "bye", "bye bye",
+    "please subscribe", "subscribe", "like and subscribe", "so", "the", "i", "okay thank you",
+}
+
+
 def join_text(parts: list[str]) -> str:
     return " ".join(p.strip() for p in parts if p and p.strip())
 
@@ -116,6 +125,10 @@ class BaseSTT:
         self.total = 0         # absolute samples fed
         self.mark = 0          # absolute start of the current utterance
         self.on_interim: Optional[Callable[[str], None]] = None
+        # the floor controller's interims: (utterance id from begin(), text)
+        self.on_interim_utt: Optional[Callable[[int, str], None]] = None
+        self.utt = 0
+        self._marks: dict[int, int] = {}       # utterance id -> its mark (final_for)
 
     async def start(self) -> None:
         pass
@@ -130,8 +143,14 @@ class BaseSTT:
             self.base += len(self.chunks.pop(0))
         self.mark = max(self.mark, self.base)
 
-    def begin(self) -> None:
+    def begin(self) -> int:
+        """A new utterance starts now (minus the preroll). Returns its id, for final_for()."""
         self.mark = max(self.base, self.total - self.preroll)
+        self.utt += 1
+        self._marks[self.utt] = self.mark
+        for u in [u for u in self._marks if u < self.utt - 50]:
+            del self._marks[u]
+        return self.utt
 
     def audio(self, start: int, end: int) -> np.ndarray:
         """Absolute sample range [start, end) of what is still buffered."""
@@ -149,6 +168,17 @@ class BaseSTT:
         if len(audio) < SR // 10:
             return ""
         return (await asyncio.to_thread(self._transcribe, audio)).strip()
+
+    async def final_for(self, utt: int) -> tuple[str, str]:
+        """(text, how) of utterance `utt`: from its mark to the next utterance's mark, or to now.
+        Finals bind by id, never by call order, and nothing is dropped for being late."""
+        if utt not in self._marks:
+            return "", "gone"
+        end = self._marks.get(utt + 1, self.total)
+        audio = self.audio(self._marks[utt], end)
+        if len(audio) < SR // 10:
+            return "", "short"
+        return (await asyncio.to_thread(self._transcribe, audio)).strip(), "base"
 
     def _transcribe(self, audio: np.ndarray, prompt: Optional[str] = None) -> str:
         raise NotImplementedError
@@ -351,12 +381,13 @@ class SpeculativeSTT(BaseSTT):
         if j.start != self.seg_start:
             return
         self.delivered_end = j.end
-        if self.on_interim is not None:
-            prefix = [c.text or "" for c in self.chunks_done]
-            try:
-                self.on_interim(join_text(prefix + [j.text]))
-            except Exception:
-                pass
+        prefix = [c.text or "" for c in self.chunks_done]
+        for cb, args in ((self.on_interim, ()), (self.on_interim_utt, (j.utt,))):
+            if cb is not None:
+                try:
+                    cb(*args, join_text(prefix + [j.text]))
+                except Exception:
+                    pass
 
     def _commit(self, j: Job) -> None:
         self.pending_commit = None
@@ -376,7 +407,7 @@ class SpeculativeSTT(BaseSTT):
                 "jobs": [j for j in self.jobs if j.start == self.seg_start and j.end <= end],
                 "last": min(last, end), "late": False}
 
-    def begin(self) -> None:
+    def begin(self) -> int:
         if self.active:
             # The previous utterance was not finalized yet: its finalize() is on its way (a task
             # started at the turn end that has not run). Keep it as it was. Its speech ended at
@@ -387,15 +418,15 @@ class SpeculativeSTT(BaseSTT):
             u["frozen_at"] = time.monotonic()
             self._ended.append(u)
             self.pending_commit = None
-        super().begin()
+        super().begin()                    # (it advances self.utt)
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
             self.loop = None
-        self.utt += 1
         self.active = True
         self._reset_utt()
         self._on_begin()
+        return self.utt
 
     def _on_begin(self) -> None:
         pass
@@ -445,12 +476,31 @@ class SpeculativeSTT(BaseSTT):
         self.pending_commit = None
         return self._freeze(self.total)
 
+    async def final_for(self, utt: int) -> tuple[str, str]:
+        """(text, how) of utterance `utt` (the id begin() returned), in any order: a frozen one is
+        never dropped for being late, and is never handed to another utterance. ("", "gone") if
+        it was finalized already."""
+        u = next((x for x in self._ended if x["utt"] == utt), None)
+        if u is not None:
+            self._ended.remove(u)
+        elif self.active and self.utt == utt:
+            self.active = False
+            self.pending_commit = None
+            u = self._freeze(self.total)
+        else:
+            return "", "gone"
+        n = len(self.stats)
+        text = await self._final_of(u)
+        return text, (self.stats[-1].get("how") if len(self.stats) > n else None) or "spec"
+
     async def finalize(self) -> str:
         """Final text since begin(). Never raises and never waits past `final_timeout_ms`."""
+        return await self._final_of(self._take())
+
+    async def _final_of(self, u: dict) -> str:
         t_call = time.monotonic()
         if self.loop is None:
             self.loop = asyncio.get_running_loop()
-        u = self._take()
         snap: dict = {"chunks": u["chunks"], "jobs": list(u["jobs"])}
         try:
             text = await asyncio.wait_for(self._finalize(u, t_call, snap), self.p["final_timeout_ms"] / 1000.0)
