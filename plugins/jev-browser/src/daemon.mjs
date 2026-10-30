@@ -8,6 +8,7 @@ import { HOME, SOCKET, LOG, ATTACH, EXT, EXT_TEST } from "./paths.mjs";
 import { launchChrome, attachUserChrome, connectExtension } from "./cdp.mjs";
 import { Browser } from "./tab.mjs";
 import { Agent } from "./agent.mjs";
+import { stopHaiku } from "./haiku.mjs";
 
 const IDLE_MS = (Number(process.env.JEVB_IDLE_HOURS) || 8) * 3600_000;
 mkdirSync(HOME, { recursive: true, mode: 0o700 });
@@ -74,6 +75,7 @@ async function handle(req) {
 
 async function quit(code) {
   try { server.close(); } catch {}
+  try { stopHaiku(); } catch {}
   try { rmSync(SOCKET, { force: true }); } catch {}
   // The user's own Chrome is never closed: only the tabs this daemon opened.
   const closing = ATTACH || (EXT && !EXT_TEST) ? Promise.all([...(browser?.tabs.keys() ?? [])].map((n) => browser.close(n))) : browser?.cdp.send("Browser.close");
