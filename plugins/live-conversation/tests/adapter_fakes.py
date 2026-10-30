@@ -56,11 +56,14 @@ class Script:
     replies: dict = field(default_factory=dict)      # question substring -> text ("" = the default)
     errors: set = field(default_factory=set)         # question substrings whose brain fails
     tts_ms: float = 50.0
+    tts_errors: set = field(default_factory=set)     # sentence substrings the TTS fails on
+    cancel_ms: float = 0.0                           # brain.cancel: the next respond waits this long
     end_ms: float = 20000.0
 
-    def segment(self, start_ms, end_ms, text, final_ms=300.0, interims=()):
+    def segment(self, start_ms, end_ms, text, final_ms=300.0, interims=(), how="spec"):
+        """`how`: "spec", or "timeout" (the final comes back empty), as the STT reports it."""
         self.segments.append({"start": start_ms, "end": end_ms, "text": text, "final_ms": final_ms,
-                              "interims": list(interims)})
+                              "interims": list(interims), "how": how})
 
     def detector(self, t, decision="barge_in", reason="open"):
         self.detectors.append((t, decision, reason))
@@ -76,6 +79,7 @@ class FakeEndpointer:
     def __init__(self, script: Script):
         self.s = script
         self.transcripts = []
+        self.trace = []                  # what the real endpointer keeps for x_endpoint
 
     def feed(self, frame, t_ms):
         out = []
@@ -84,6 +88,7 @@ class FakeEndpointer:
                 out.append(Decision("speech_start", t_ms))
             if seg["end"] + 600 <= t_ms < seg["end"] + 620:
                 out.append(Decision("turn_end", t_ms, pause_start_ms=seg["end"]))
+                self.trace.append({"pause_start_ms": seg["end"], "class": "statement", "text_ms": 50})
         return out
 
     def on_transcript(self, text, final):
@@ -100,6 +105,7 @@ class FakeSTT:
         self.on_event = None
         self.utt = 0
         self.tasks = []
+        self.finalized: set = set()
 
     def feed(self, frame):
         pass
@@ -117,8 +123,14 @@ class FakeSTT:
             self.on_interim_utt(utt, text)
 
     async def final_for(self, utt):
-        await wait_ms(self.clock, self.s.segments[utt - 1]["final_ms"])
-        return self.s.segments[utt - 1]["text"], "spec"
+        seg = self.s.segments[utt - 1]
+        await wait_ms(self.clock, seg["final_ms"])
+        if seg.get("how") == "timeout":
+            return "", "timeout"
+        if utt in self.finalized:
+            return "", "gone"
+        self.finalized.add(utt)
+        return seg["text"], "spec"
 
     async def start(self):
         pass
@@ -152,11 +164,14 @@ class FakeBrain:
         self.s, self.clock = script, clock
         self.calls = []
         self.cancelled = 0
+        self.busy_until = 0.0
 
     async def start(self):
         pass
 
     async def respond(self, text, interrupted=None):
+        # like the real brain: a process still stopping the last reply makes this one wait
+        await wait_ms(self.clock, self.busy_until - self.clock.ms)
         self.calls.append((text, interrupted))
         await wait_ms(self.clock, self.s.brain_ms)
         if any(e in text for e in self.s.errors):
@@ -169,6 +184,7 @@ class FakeBrain:
 
     async def cancel(self):
         self.cancelled += 1
+        self.busy_until = self.clock.ms + self.s.cancel_ms
 
     async def close(self):
         pass
@@ -178,6 +194,7 @@ class FakeTTS:
     def __init__(self, script: Script, clock: Clock):
         self.s, self.clock = script, clock
         self.calls = []
+        self.lock = asyncio.Lock()       # like Kokoro: one synthesis at a time, first come first served
 
     async def start(self):
         pass
@@ -186,9 +203,13 @@ class FakeTTS:
         pass
 
     async def synthesize(self, text):
-        self.calls.append(text)
-        await wait_ms(self.clock, self.s.tts_ms)
-        yield speech(text)
+        async with self.lock:
+            self.calls.append(text)
+            await wait_ms(self.clock, self.s.tts_ms)
+            if any(e in text for e in self.s.tts_errors):
+                raise RuntimeError("tts failed")
+            pcm = speech(text)
+        yield pcm
 
 
 class FakeAudio:
@@ -218,7 +239,7 @@ class FakeAudio:
 
     def _busy(self) -> bool:
         f = getattr(self, "reply_active", None)
-        return bool(f and f()) or self.sink.queued_end > self.clock.samples
+        return bool(f and f()) or self.sink.is_playing()      # as FileAudio waits (paused counts)
 
 
 def make(script: Script, cfg: Optional[dict] = None):

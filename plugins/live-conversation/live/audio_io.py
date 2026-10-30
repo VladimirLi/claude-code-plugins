@@ -142,6 +142,13 @@ class Sink:
     def resume(self) -> None:
         self.paused = False
 
+    def drop(self) -> None:
+        """A stopped reply: drop what is queued and stop, with no event (the floor controller logs
+        playback_stopped) and no reply_audio_end later."""
+        self._drop_queued()
+        self.paused = False
+        self._was_playing = False
+
     def tag_at(self, sample: int):
         """(tag, samples into that write) of the tagged write that holds `sample`, or None."""
         for a, b, t in reversed(self.tags):

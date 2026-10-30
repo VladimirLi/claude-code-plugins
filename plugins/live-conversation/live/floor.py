@@ -169,6 +169,7 @@ class Played:
     piece: str
     ms: float                    # how far into the piece playback has reached
     t_ms: float = 0.0
+    heard_from_ms: Optional[float] = None   # when this report's audio began, if before t_ms
 
 
 @dataclass
@@ -346,7 +347,8 @@ class Announcement:
     state: str = "queued"        # queued | carried | heard | dropped
     rid: Optional[str] = None
     tries: int = 0               # failed deliveries (a join restart is none)
-    silent_tries: int = 0        # failed deliveries whose reply played no content
+    silent_tries: int = 0        # failed deliveries that failed by themselves: no content played,
+                                 # or the reply ended in an error
 
 
 @dataclass
@@ -605,7 +607,7 @@ class Floor:
             r.sound_ms = self.now
             if r.first_heard_ms is None:
                 r.first_heard_ms = self.now
-                self._first_content(r)
+                self._first_content(r, ev.heard_from_ms if ev.heard_from_ms is not None else self.now)
         elif r.gate == "open":
             r.ka_heard = True
             if r.heard == "none":
@@ -619,8 +621,10 @@ class Floor:
         self._maybe_end(r)
 
     def _maybe_end(self, r: Reply) -> None:
-        """A reply ends when the brain and TTS are done and the gate has nothing left, in any order."""
-        if r.brain == "done" and r.tts == "done" and r.drained:
+        """A reply ends when the brain and TTS are done and the gate has nothing left, in any order,
+        and never while its gate is paused: the pause resolves first (no words: it plays on with
+        nothing left and ends; words: it is stopped)."""
+        if r.brain == "done" and r.tts == "done" and r.drained and r.gate != "paused":
             self._end_reply("drained", stop=False)
             self._close_utterance()
 
@@ -924,7 +928,7 @@ class Floor:
                     a.state = "queued"
         else:
             self._settle_announcements(r)
-        self._floor("end", reason)
+        self._floor("end", reason, spoken=self._spoken(r))   # the one spoken text (transcript, logs)
         self.last_heard = Interrupted(self._spoken(r), r.question) if r.kind == "answer" else None
         self.reply = None
         self._cancel_timer("cap")
@@ -946,10 +950,10 @@ class Floor:
         self.ted_labels.add(u.label)
         self._emit("turn_end_detected", u.label, t_ms=self.segs[max(words)].turn_end_ms)
 
-    def _first_content(self, r: Reply) -> None:
+    def _first_content(self, r: Reply, t_ms: float) -> None:
         if r.label not in self.first_audio_labels:
             self.first_audio_labels.add(r.label)
-            self._emit("first_reply_audio", r.label, filler=False)
+            self._emit("first_reply_audio", r.label, filler=False, t_ms=t_ms)
         if r.kind == "answer" and r.label not in self.ted_labels and r.label == self.utt.label:
             self._turn_end_detected(self.utt)
 
@@ -977,7 +981,7 @@ class Floor:
                 self._floor("announce_heard", f"played {frac:.2f}", id=a.id, label=a.label)
             else:
                 a.state, a.tries = "queued", a.tries + 1
-                a.silent_tries += r.first_heard_ms is None
+                a.silent_tries += r.first_heard_ms is None or r.brain == "failed"
                 if a.silent_tries >= self.cfg["max_silent_tries"]:
                     a.state = "dropped"
                     self._emit("x_announce_dropped", a.label, id=a.id, prompt=a.prompt, tries=a.tries)
@@ -1015,6 +1019,9 @@ class Floor:
         r = self.reply
         if r is not None:
             self._gate(r)
+            self._maybe_end(r)                       # a pause that resolved can end a drained reply
+            r = self.reply
+        if r is not None:
             if r.brain == "running" and r.gate == "open":
                 # Move the timer only earlier (content after a keepalive restarts the 4.5 s); a
                 # later due is re-read when it fires, so content audio sets no timer per frame.

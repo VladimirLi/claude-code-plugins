@@ -110,7 +110,9 @@ One new module, `live/floor.py`: a pure, synchronous state machine.
   text is each segment's `meaningful` final, joined in **segment order**. It is cleared when its
   reply ends.
 - **Reply**: one brain call and its audio, made for one version of an utterance. It **ends** on
-  `drained` after `brain_done` and `tts_done`, on `stop_reply`, or on `brain_error`. Then
+  `drained` after `brain_done` and `tts_done`, on `stop_reply`, or on `brain_error`.
+  *(Step 4: never while its gate is paused; the end waits until the pause resolves, so the sink
+  is never left paused and every `playback_paused` pairs.)* Then
   `reply = None`, and every unresolved segment and live blip carries over into the next utterance.
 - **Heard content**: reply content audio that has played (not only queued), tentative included.
   Keepalive lines are not content.
@@ -288,6 +290,8 @@ The word boundary is estimated from the piece's length, because the TTS gives no
    - A heard item is never carried again.
    - *Note (step 3): a join restart is not an end for this: the new reply carries the same items
      with the same `tries`, so an item never heard gets no retry note.*
+   - *Note (step 4): a try that ended in `brain_error` (or a TTS failure) counts like one that
+     played no content: else a reply that fails after its first sentence retries forever.*
    - *Note (step 3b): after 3 failed tries whose reply played no content, the item is `dropped`,
      logged as `x_announce_dropped` with its prompt, and never carried again. I6 then reads "heard
      exactly once, or dropped".*

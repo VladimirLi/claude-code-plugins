@@ -287,6 +287,7 @@ class _Reply:
     error: bool = False
     stopped: bool = False
     drained: bool = True         # nothing queued since the sink's last drained
+    paused: bool = False         # its gate, from the pause and play actions
     pieces: list = field(default_factory=list)    # [(piece, kind, text, dur)] in arrival order
     played: dict = field(default_factory=dict)    # piece -> furthest ms
     offset: Optional[tuple] = None                # (piece, ms) of the last Played
@@ -302,7 +303,8 @@ class _Reply:
 
     @property
     def ended(self) -> bool:
-        return self.stopped or self.error or (self.brain_done and self.tts_done and self.drained)
+        return self.stopped or self.error or (self.brain_done and self.tts_done and self.drained
+                                              and not self.paused)
 
     @property
     def content(self) -> dict:
@@ -505,7 +507,8 @@ class Checker:
                 if kind == "content":
                     r.sound = t
                     if r.first_content is None:
-                        r.first_content = t
+                        heard_from = getattr(ev, "heard_from_ms", None)
+                        r.first_content = heard_from if heard_from is not None else t
                 else:
                     r.ka_played = True
 
@@ -531,6 +534,9 @@ class Checker:
             return
         if isinstance(a, F.Emit):
             self.emits.append((t, a))
+            if a.name == "x_floor" and a.fields.get("act") == "end" and a.fields.get("reason") == "drained" \
+                    and sim.sink.rid == a.fields.get("rid") and sim.sink.paused:
+                self.fail("end", f"{a.fields.get('rid')} ended while its gate is paused")
             return
         if isinstance(a, F.ResetDetector) and isinstance(ev, F.Detector):
             self.duck_only.append(t)
@@ -548,6 +554,7 @@ class Checker:
             if not ok:
                 self.fail("I9", f"{a.rid} stopped by {type(ev).__name__} without words")
         elif isinstance(a, F.Pause):
+            r.paused = True
             r.last_pause = t
             for (rid, _), span in self.spans.items():
                 if rid == r.rid:
@@ -574,7 +581,8 @@ class Checker:
                 if r.first_content is not None and target not in r.held:
                     r.det_pauses.append(t)
         elif isinstance(a, F.Play):
-            if r.ended:
+            r.paused = False
+            if r.ended and (r.stopped or r.error):
                 self.fail("I4", f"play for ended reply {a.rid}")
             self._check_rewind(r, a, t)
             r.sound = r.last_play = t
@@ -796,7 +804,8 @@ class Checker:
         dropped = {e.fields["id"]: t for t, e in self.emits if e.name == "x_announce_dropped"}
         for item in items:
             n = sum(1 for r in self.replies.values() if item in r.carries and self._heard(r))
-            silent = sum(1 for r in self.replies.values() if item in r.carries and r.first_content is None)
+            silent = sum(1 for r in self.replies.values()
+                         if item in r.carries and (r.first_content is None or r.error))
             if item in dropped:
                 if n or silent < self.cfg["max_silent_tries"]:
                     self.fail("I6", f"announcement {item} dropped after {silent} silent tries, heard {n}")
@@ -836,7 +845,7 @@ class Checker:
             want = max(segs, key=lambda s: s.order).turn_end if segs else None
             if mine[0].fields["t_ms"] != want:
                 self.fail("I7", f"label {lab} turn_end_detected t_ms {mine[0].fields['t_ms']} != {want}")
-            got = [t for t, e in fra if e.label == lab]
+            got = [e.fields.get("t_ms", t) for t, e in fra if e.label == lab]
             if heard and got != [first.first_content]:
                 self.fail("I7", f"label {lab} first_reply_audio at {got}, content at {first.first_content}")
             if not heard and got:

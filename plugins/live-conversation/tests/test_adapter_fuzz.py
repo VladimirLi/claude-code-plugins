@@ -9,11 +9,14 @@ It checks what only the adapter can break:
   never while its gate is paused (late text or audio of a stopped reply, synthesis across a pause,
   a keepalive in flight);
 - the floor Checker's invariants and rule oracles (tests/floor_driver.py) on the adapter's real
-  events and actions, with the sink's real positions as `played`.
+  events and actions, with the sink's real positions as `played`;
+- no task or controller exception (x_task_error), with TTS failures, empty timeout finals and a
+  brain whose cancel holds the next reply up to 5 s in the mix.
 """
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import sys
 import unittest
@@ -179,7 +182,10 @@ class CheckedAdapter(FloorAdapter):
 def scenario(seed: int):
     rng = np.random.default_rng(seed)
     s = Script(brain_ms=float(rng.choice([300, 800, 3000, 7000])), brain_gap_ms=float(rng.uniform(50, 2000)),
-               tts_ms=float(rng.uniform(20, 600)), end_ms=25000.0)
+               tts_ms=float(rng.uniform(20, 600)), end_ms=25000.0,
+               cancel_ms=float(rng.choice([0, 0, 300, 5000])))    # brain.cancel can take up to 5 s
+    if rng.random() < 0.1:
+        s.tts_errors = {str(rng.choice(REPLIES)).split()[0]}
     s.replies = {"": " ".join(str(x) for x in rng.choice(REPLIES, int(rng.integers(1, 4)), replace=False))}
     kinds: dict = {}
     t = 100.0
@@ -200,7 +206,8 @@ def scenario(seed: int):
             text, ints = "Thank you.", []
         else:
             text, ints = "", []
-        s.segment(t, t + dur, text, final_ms=float(rng.choice([100, 300, 800, 2500])), interims=ints)
+        how = "timeout" if kind == "words" and rng.random() < 0.08 else "spec"
+        s.segment(t, t + dur, text, final_ms=float(rng.choice([100, 300, 800, 2500])), interims=ints, how=how)
         kinds[str(len(s.segments))] = kind
         if rng.random() < 0.3:
             s.detector(t + 40, "barge_in", "open")
@@ -225,6 +232,14 @@ def run_seed(seed: int) -> None:
     for i, seg in enumerate(s.segments, 1):
         utt = str(i)
         truth.words[utt] = seg["text"] if kinds[utt] in ("words", "backchannel") else ""
+        if seg["how"] == "timeout":
+            # the final comes back empty: the controller can only use the last interim before it
+            # as the fakes fire: on 20 ms frames (turn_end, then the final's wait from there); an
+            # interim on the same frame as the final comes first (its task is older)
+            frame = lambda x: math.ceil(x / 20.0) * 20.0                      # noqa: E731
+            final_at = frame(frame(seg["end"] + 600) + seg["final_ms"])
+            before = [x for t, x in seg["interims"] if frame(t) <= final_at]
+            truth.words[utt] = before[-1] if before else ""
         if kinds[utt] == "backchannel":
             truth.backchannel.add(utt)
     busy = audio._busy
@@ -243,6 +258,7 @@ def run_seed(seed: int) -> None:
         o.checker.quiescent()
         await o.close()
     asyncio.run(go())
+    o.failures += [e.extra["error"] for e in log.events if e.event == "x_task_error"]
     if o.failures:
         raise AssertionError("; ".join(o.failures[:3]))
 

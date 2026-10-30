@@ -778,8 +778,28 @@ class TestReviewFindings(FloorCase):
         sim.run()
         self.assertEqual(sim.questions(), [Q1, "okay"])         # words, not a backchannel over content
 
+    def test_a_reply_never_ends_while_paused(self):
+        # adapter critic e1: drained between sentences, a blip pauses, the brain finishes with no more
+        sim = Sim(plans=Plan(pieces=[("The logs show no errors.", 1500)], done_ms=2500))
+        ask(sim)                                               # plays 2220-3720; brain_done at 4400
+        sim.detector(4000)                                     # paused 4000-4800
+        sim.run()
+        end = [t for t, f in sim.floor_log("end")]
+        self.assertEqual(end, [4800.0])                        # after the blip, not at brain_done
+        self.assertEqual(len(sim.emits("playback_resumed")), 1)
+
     def test_hum_before_a_hallucination_is_no_words(self):
         self.assertEqual(F.make_meaningful()("Hmm, thank you.", []), "")
+
+    def test_announcement_that_fails_after_its_first_sentence_is_dropped(self):
+        # adapter fuzz seed 371: content played each try, then an error: retried forever
+        plan = Plan(pieces=[("Should I keep going?", 600), ("The build is green.", 900)], gap_ms=1500,
+                    error_ms=1500)
+        sim = Sim(plans={"Task": plan, "": Plan()})
+        sim.at(0, F.TaskResult("t1", "Task 1 finished."))
+        sim.run()
+        self.assertEqual([a.kind for a in sim.starts()], ["announce"] * 3)
+        self.assertEqual(len(sim.emits("x_announce_dropped")), 1)
 
     def test_played_while_paused_is_ignored(self):
         f = F.Floor()

@@ -68,9 +68,9 @@ class _Reply:
     paused: bool = False
     resume: tuple = (0, 0)       # (piece index, sample) where playback goes on after a pause
     drained_sent: bool = True
-    played: dict = field(default_factory=dict)      # piece name -> furthest ms played
     text_generated: str = ""
     interrupted: bool = False
+    spoken: Optional[str] = None                    # the controller's, when the reply ended
     tasks: list = field(default_factory=list)
 
 
@@ -129,6 +129,8 @@ class FloorAdapter:
                              safe(tts(), "tts"))
 
     async def close(self) -> None:
+        if self.reply is not None or self.floor.reply is not None:
+            self._on(F.End())                      # the session ended mid-reply (wall cap, Ctrl-C)
         for t in list(self.tasks):
             t.cancel()
         await self.c.brain.close()
@@ -138,8 +140,14 @@ class FloorAdapter:
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
         self.tasks.add(t)
-        t.add_done_callback(self.tasks.discard)
+        t.add_done_callback(self._task_done)
         return t
+
+    def _task_done(self, t: asyncio.Task) -> None:
+        self.tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            e = t.exception()
+            self.log.emit("x_task_error", None, error=f"{type(e).__name__}: {e}"[:300])
 
     # -- events in -------------------------------------------------------------------------------
     def _on(self, ev) -> None:
@@ -149,8 +157,14 @@ class FloorAdapter:
         if rid is not None and (self.reply is None or self.reply.rid != rid):
             return
         ev.t_ms = self.clock.ms
-        for a in self.floor.on(ev):
-            self._do(a)
+        try:
+            acts = self.floor.on(ev)
+            for a in acts:
+                self._do(a)
+        except Exception as e:
+            # a controller or adapter bug: logged here, since STT callbacks swallow exceptions
+            self.log.emit("x_task_error", None, error=f"{type(e).__name__}: {e}"[:300], on=type(ev).__name__)
+            raise
 
     async def run(self) -> None:
         async for frame in self.audio.frames():
@@ -232,8 +246,10 @@ class FloorAdapter:
                 if rid != r.rid or self.reply is not r:
                     continue
                 ms = (off + min(b, now) - a) * 1000.0 / SR
-                r.played[name] = max(r.played.get(name, 0.0), ms)
-                self._on(F.Played(rid, name, ms))
+                # when this stretch was first heard: first_reply_audio is the write's start, not
+                # the end of the frame that reported it
+                start = max(a, self.heard_to) * 1000.0 / SR
+                self._on(F.Played(rid, name, ms, heard_from_ms=start))
         self.heard_to = now
         if self.reply is not r:
             return
@@ -292,7 +308,7 @@ class FloorAdapter:
         self.log.emit(a.name, turn, t_ms=t_ms, **fields)
         if a.name == "x_floor" and fields.get("act") == "end" and self.reply is not None \
                 and self.reply.rid == fields.get("rid"):
-            self._ended(self.reply, fields.get("reason"))
+            self._ended(self.reply, fields.get("reason"), fields.get("spoken", ""))
 
     def _start(self, a) -> None:
         r = _Reply(a.rid, a.label, a.kind, a.question)
@@ -320,44 +336,57 @@ class FloorAdapter:
         synth = self._spawn(self._synth(r, sentences))
         r.tasks.append(synth)
         chunker = Chunker()
-        try:
-            first = True
-            async for delta in self.c.brain.respond(prompt, ctx):
-                if not self._live(r):
-                    return
-                if first:
-                    first = False
-                    self.log.emit("first_reply_text", self._turn(r.label), text=delta)
-                    timing = getattr(self.c.brain, "last_timing", None)
-                    if timing:
-                        self.log.emit("x_brain", self._turn(r.label), **timing)
-                r.text_generated += delta
-                self._on(F.BrainText(r.rid, delta))
-                for s in chunker.push(delta):
-                    sentences.put_nowait(s)
-            for s in chunker.flush():
+        stream = self.c.brain.respond(prompt, ctx).__aiter__()
+        first = True
+        while True:
+            try:
+                delta = await stream.__anext__()
+            except StopAsyncIteration:
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:                 # the brain failed; a controller bug is not this
+                self.log.emit("x_brain_error", self._turn(r.label), error=str(e)[:200])
+                synth.cancel()
+                self._on(F.BrainError(r.rid))
+                return
+            if not self._live(r):
+                return
+            if first:
+                first = False
+                self.log.emit("first_reply_text", self._turn(r.label), text=delta)
+                timing = getattr(self.c.brain, "last_timing", None)
+                if timing:
+                    self.log.emit("x_brain", self._turn(r.label), **timing)
+            r.text_generated += delta
+            self._on(F.BrainText(r.rid, delta))
+            for s in chunker.push(delta):
                 sentences.put_nowait(s)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            self.log.emit("x_brain_error", self._turn(r.label), error=str(e)[:200])
-            synth.cancel()
-            self._on(F.BrainError(r.rid))
-            return
+        for s in chunker.flush():
+            sentences.put_nowait(s)
         self._on(F.BrainDone(r.rid))
         sentences.put_nowait(None)
-        await synth
-        self._on(F.TtsDone(r.rid))
+        if await synth:
+            self._on(F.TtsDone(r.rid))
 
-    async def _synth(self, r: _Reply, sentences: asyncio.Queue) -> None:
+    async def _synth(self, r: _Reply, sentences: asyncio.Queue) -> bool:
+        """True when every sentence was synthesized. A TTS failure ends the reply as a brain
+        error would: nothing else would ever end it."""
         n = 0
         while True:
             text = await sentences.get()
             if text is None:
-                return
-            pcm = await self._synthesize(text)
+                return True
+            try:
+                pcm = await self._synthesize(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.log.emit("x_tts_error", self._turn(r.label), error=str(e)[:200], text=text[:80])
+                self._on(F.BrainError(r.rid))
+                return False
             if not self._live(r):
-                return
+                return False
             if len(pcm):
                 self._piece(r, _Piece(f"p{n}", "content", text, pcm))
                 n += 1
@@ -369,7 +398,10 @@ class FloorAdapter:
     async def _keepalive(self, r: _Reply) -> None:
         line = KEEPALIVE[self.ka_used % len(KEEPALIVE)]
         self.ka_used += 1
+        content = sum(p.kind == "content" for p in r.pieces)
         pcm = await self._synthesize(line)
+        if sum(p.kind == "content" for p in r.pieces) != content:
+            return                     # the TTS queued it behind a sentence: content came first
         if self._live(r) and len(pcm):
             self.log.emit("x_keepalive", self._turn(r.label), text=line)
             self._piece(r, _Piece(f"k{self.ka_used}", "keepalive", line, pcm))
@@ -449,40 +481,31 @@ class FloorAdapter:
         for t in r.tasks:
             t.cancel()
         self._spawn(self.c.brain.cancel())
-        self.sink.pause()                          # drop what is queued ...
-        self.sink.resume()                         # ... and play nothing of this reply again
-        self._ended(r, "stop")
+        self.sink.drop()                           # nothing of this reply plays again
+        # the controller's x_floor end follows in the same actions and ends the record (_ended)
 
-    def _ended(self, r: _Reply, reason: Optional[str]) -> None:
+    def _ended(self, r: _Reply, reason: Optional[str], spoken: str) -> None:
         if self.reply is not r:
             return
         self.reply = None
+        r.spoken = spoken
+        if self.sink.paused:
+            self.sink.resume()                     # never leave the sink paused (FileAudio waits on it)
         self.log.emit("x_reply_text", self._turn(r.label), text=" ".join(p.text for p in r.pieces
                                                                          if p.kind == "content"),
-                      interrupted=r.interrupted, spoken=self._spoken(r), reason=reason)
-
-    def _spoken(self, r: _Reply) -> str:
-        """The text up to the furthest played offset; a piece played again after a pause counts once."""
-        out = []
-        for p in r.pieces:
-            ms = r.played.get(p.name, 0.0)
-            if p.kind != "content" or ms <= 0:
-                continue
-            dur = len(p.pcm) * 1000.0 / SR
-            words = p.text.split()
-            out.extend(words[:len(words) if ms >= dur else round(len(words) * ms / dur)])
-        return " ".join(out)
+                      interrupted=r.interrupted, spoken=spoken, reason=reason)
 
     # -- output ----------------------------------------------------------------------------------
     def transcript(self, scripts: Optional[dict] = None) -> dict:
         turns = []
-        labels = sorted(set(self.user_turns) | set(scripts or {}), key=lambda x: (x is None, str(x)))
+        labels = sorted(set(self.user_turns) | set(scripts or {}),
+                        key=lambda x: (x is None, not isinstance(x, int), x if isinstance(x, int) else 0, str(x)))
         for n in labels:
             turns.append({"role": "user", "turn": n, "script": (scripts or {}).get(n, ""),
                           "asr_text": self.user_turns.get(n, "")})
             for r in self.records:
                 if r.kind == "answer" and self._turn(r.label) == n:
                     turns.append({"role": "assistant", "reply_to": n, "text_generated": r.text_generated,
-                                  "text_spoken": self._spoken(r) if r.interrupted else r.text_generated,
+                                  "text_spoken": (r.spoken or "") if r.interrupted else r.text_generated,
                                   "interrupted": r.interrupted, "fillers": []})
         return {"turns": turns}

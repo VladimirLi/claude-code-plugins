@@ -191,6 +191,118 @@ class TestRewindAndDuck(unittest.TestCase):
         self.assertEqual([g for t, g in gains if t > 3200][-1], 0.0)
 
 
+class TestAdapterReview(unittest.TestCase):
+    """The adapter critic's findings (scratchpad exp/e1-e5)."""
+
+    def test_reply_drained_then_paused_never_leaves_the_sink_paused(self):
+        # e1: the queue empties between sentences, a blip pauses, the brain then finishes
+        s = Script(end_ms=8000)
+        s.segment(100, 1100, Q1)
+        s.detector(4000)
+        o, log = make(s)
+
+        async def respond(text, interrupted=None):
+            o.c.brain.calls.append((text, interrupted))
+            from adapter_fakes import wait_ms
+            await wait_ms(log.clock, 300)
+            yield "The logs show no errors. "
+            await wait_ms(log.clock, 1800)
+            yield " "
+        o.c.brain.respond = respond
+
+        async def go():
+            await o.start()
+            await asyncio.wait_for(o.run(), 20)
+            await o.close()
+        asyncio.run(go())
+        self.assertFalse(o.sink.paused)
+        self.assertEqual(len(events(log, "playback_paused")), len(events(log, "playback_resumed")))
+        self.assertEqual(len(events(log, "x_reply_text")), 1)
+        self.assertLess(log.clock.ms, 9000)
+
+    def test_tts_failure_ends_the_reply(self):
+        # e2
+        s = Script()
+        s.tts_errors = {"Everything"}
+        s.segment(100, 1100, Q1)
+        o, log = run(s)
+        self.assertEqual(len(events(log, "x_tts_error")), 1)
+        self.assertIsNone(o.floor.reply)
+        self.assertEqual(events(log, "x_task_error"), [])
+        self.assertLess(log.clock.ms, 21000)
+
+    def test_first_reply_audio_is_the_first_heard_sample(self):
+        # e3: stamped at the write start, not the end of the frame that reported it
+        s = Script(tts_ms=37)                      # a write that starts mid-frame
+        s.segment(100, 1100, Q1)
+        o, log = run(s)
+        h = heard(o)
+        first = int(np.nonzero(h)[0][0]) * 1000.0 / 24000
+        self.assertAlmostEqual(events(log, "first_reply_audio")[0].t_ms, first, places=3)
+
+    def test_live_review_waits_from_the_speech_stop(self):
+        # e4: x_endpoint has no label on the floor path; live-review pairs it by time
+        import subprocess
+        import tempfile
+        s = Script()
+        s.segment(100, 1100, Q1)
+        o, log = run(s)
+        d = tempfile.mkdtemp()
+        log.write(os.path.join(d, "events.jsonl"))
+        plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out = subprocess.run([sys.executable, os.path.join(plugin, "bin", "live-review"), d],
+                             capture_output=True, text=True).stdout
+        row = [line for line in out.splitlines() if line.startswith("| 1 |")][0]
+        first = events(log, "first_reply_audio")[0].t_ms
+        self.assertIn(f"{round(first - 1100)}", row.replace(" ms", ""))   # from the stop at 1100 ms
+
+    def test_session_end_mid_reply_ends_it(self):
+        s = Script(brain_ms=300, end_ms=2600)
+        s.replies = {"": "One two three four five six seven eight nine ten."}
+        s.segment(100, 1100, Q1)
+        o, log = make(s)
+        o.audio._busy = lambda: False              # the wall cap: frames stop mid-reply
+        asyncio.run(drive(o))
+        ends = [e.extra.get("reason") for e in events(log, "x_reply_text")]
+        self.assertEqual(ends, ["end"])
+        self.assertTrue(o.transcript()["turns"][1]["interrupted"])
+
+    def test_reply_text_reason_and_no_audio_end_after_a_stop(self):
+        s = Script()
+        s.segment(100, 1100, Q1)
+        s.segment(2600, 3200, "stop show the errors", interims=[(3000, "stop show")])
+        o, log = run(s)
+        self.assertEqual([e.extra["reason"] for e in events(log, "x_reply_text")], ["interrupt", "drained"])
+        self.assertEqual(len(events(log, "reply_audio_end")), 1)      # the second reply's only
+
+    def test_transcript_orders_turns_numerically(self):
+        o, _ = make(Script())
+        o.user_turns = {n: f"q{n}" for n in range(1, 12)}
+        turns = [t["turn"] for t in o.transcript()["turns"]]
+        self.assertEqual(turns, list(range(1, 12)))
+
+    def test_controller_exception_is_logged(self):
+        s = Script()
+        s.segment(100, 1100, Q1, interims=[(800, "What is")])
+        o, log = make(s)
+        on = o.floor.on
+
+        def broken(ev):
+            if type(ev).__name__ == "Interim":
+                raise ValueError("planted")
+            return on(ev)
+        o.floor.on = broken
+        asyncio.run(drive(o))
+        self.assertEqual(len(events(log, "x_task_error")), 1)
+
+    def test_keepalive_queued_behind_content_is_dropped(self):
+        s = Script(brain_ms=400, tts_ms=300)       # content synthesis 400-700 holds the TTS lock
+        s.segment(100, 1100, Q1)
+        o, log = run(s, {"orchestrator": {"keepalive_after_ms": 500}})
+        self.assertEqual(events(log, "x_keepalive"), [])
+        self.assertFalse([t for a, b, t in o.sink.tags if t[1].startswith("k")])
+
+
 class TestStaleCallbacks(unittest.TestCase):
     def test_a_stopped_reply_never_reaches_the_sink(self):
         s = Script(brain_gap_ms=1500)              # the old reply keeps producing after its stop

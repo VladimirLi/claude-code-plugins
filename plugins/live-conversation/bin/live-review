@@ -194,7 +194,8 @@ def review(d):
         if e["event"] != "turn_end_detected":
             continue
         turn, t = e.get("turn"), e["t_ms"]
-        ep = at("x_endpoint", t - 5, t + 50, turn)
+        # by time: the floor path logs x_endpoint at the turn end, before the turn has a label
+        ep = at("x_endpoint", t - 5, t + 50)
         stop = (ep or {}).get("pause_start_ms") or t
         # the floor controller logs the rebuilt question each time it changes: show the last one
         texts = [x for x in ev if x["event"] == "final_transcript" and x.get("turn") == turn
