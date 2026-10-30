@@ -41,6 +41,12 @@
       "title": "Show the browser",
       "description": "Run the dedicated Chrome with visible windows (to log in by hand). Takes effect when the daemon next starts (jevb stop).",
       "default": false
+    },
+    "haiku_loop": {
+      "type": "boolean",
+      "title": "Haiku outer loop",
+      "description": "When a do falls short (stuck, max_actions, ambiguous), let Claude Haiku, on your Claude subscription through one kept-open claude -p child, split the goal into short do sub-goals (at most 8 and 60 s per call). Confirmations, logins and captchas still come back to you. Off by default.",
+      "default": false
     }
   },
   "mcpServers": {
@@ -51,7 +57,8 @@
         "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
         "OPENROUTER_API_KEY": "${user_config.openrouter_api_key}",
         "JEVB_HEADED": "${user_config.headed}",
-        "JEVB_ATTACH": "${user_config.use_my_chrome}"
+        "JEVB_ATTACH": "${user_config.use_my_chrome}",
+        "JEVB_HAIKU": "${user_config.haiku_loop}"
       }
     }
   }

@@ -27,6 +27,17 @@ By default the plugin runs its own headless Chrome with a separate profile. To h
 
 Each session opens its own window in your Chrome. Pages keep your real window size, language and user agent. `close` and `stop` close only the tabs the plugin opened, never Chrome itself. This mode has its own daemon (`daemon-attach.sock`), so it never mixes with the separate Chrome. Every site you are logged in to is reachable in this mode; the irreversible-action gate still applies.
 
+## Haiku outer loop (optional)
+
+Off by default. Turn on "Haiku outer loop" in `/plugin` (jev-browser, Configure), or set `JEVB_HAIKU=1` for the CLI. With it off, `do` behaves exactly as without it.
+
+With it on, `do` first runs as usual. Only when that plain run falls short (`stuck`, `max_actions`, `ambiguous`, `needs_value` on a field that is not secret, or `not_found` on a goal with several steps) does Claude Haiku come in. Haiku runs on your Claude subscription, not an API key, through one `claude -p --model haiku` stream-json process per daemon. That process is started on first use, reused, replaced by a fresh one after each loop (so loops never share context), and stopped after 5 idle minutes. Haiku splits the goal into short `do` sub-goals, reads each result (status, actions, a short page view inside the untrusted-content markers) and picks the next one, rephrases after `stuck` or `not_found`, or stops. It can write the text a field needs when the goal states it ("Add a todo that says 'buy milk'"), never a password, card, token or a key you already gave. Haiku never upgrades a status: a sub-goal must end `done` or `likely_done` for the call to say so.
+
+- `needs_confirmation`, `needs_login` and `needs_human` end the loop at once and come back unchanged, with the `resume:` line. Haiku can never pass `allow_irreversible`, and a `do` with `allow_irreversible` never uses the loop.
+- Hard budget per call: 8 sub-goals and 60 s of wall time, the plain run included. When it runs out, the result is the last status (or `max_actions` with a `next: do "..."` line for the sub-goal Haiku had planned).
+- The result keeps the last sub-goal's report and adds a `haiku:` block listing each sub-goal and its status.
+- The `claude` child loads nothing your own sessions load: `--safe-mode`, `--tools ""`, `--strict-mcp-config` with an empty config, `--setting-sources ""`, `--disable-slash-commands`, `--no-session-persistence`, its own system prompt, low effort, no thinking, an empty working directory (`haiku/` under the plugin's data folder), and an environment without the parent session's `CLAUDE_CODE_*` variables or any API key. A Haiku turn takes about 1.5 to 3 s, which is why the loop never runs after a plain run that ended as met. `JEVB_CLAUDE` names another `claude` binary.
+
 ## CLI
 
 ```
@@ -73,4 +84,4 @@ When the goal names something the page does not show yet, `do` watches for a pag
 
 ## Files
 
-`~/.claude/plugins/data/jev-browser-vladimirli-plugins/`: `daemon.sock`, `daemon.log` (operation names and timings only), `chrome-profile/`, `shots/`, and optionally `.env`. `JEVB_HOME` moves all of them.
+`~/.claude/plugins/data/jev-browser-vladimirli-plugins/`: `daemon.sock`, `daemon.log` (operation names and timings only), `chrome-profile/`, `shots/`, `haiku/` (the Haiku child's empty working directory), and optionally `.env`. `JEVB_HOME` moves all of them.

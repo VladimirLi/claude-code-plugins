@@ -13,6 +13,8 @@ const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SE
   do <goal> [--values JSON] [--max N] [--allow-irreversible] [--vision]
                                                let Jev reach one observable outcome; values are typed by key
                                                (no values and the goal needs text: status needs_value, with a field: line)
+                                               JEVB_HAIKU=1: when a plain do falls short, a Haiku outer loop
+                                               (your Claude subscription) splits the goal into short do calls
   act <op> [id] [value]                        one action: click|dblclick|right_click|hover|check|uncheck|type|clear|
                                                select|press_enter|press_key|upload|drag|scroll|wait|back|navigate
         e.g. act click 12 · act type 7 "hello" · act select 5 "Option 2" · act press_key Escape
@@ -84,7 +86,7 @@ const client = new Client();
 let op = cmd, args = {};
 switch (cmd) {
   case "open": if (!rest[0]) fail("open needs a url"); args = { url: rest[0], full: !!flags.full }; break;
-  case "do": if (!rest.length) fail("do needs a goal"); args = { goal: rest.join(" "), values: values(), max_actions: flags.max, allow_irreversible: !!flags.allow, vision: !!flags.vision }; break;
+  case "do": if (!rest.length) fail("do needs a goal"); args = { goal: rest.join(" "), values: values(), max_actions: flags.max, allow_irreversible: !!flags.allow, vision: !!flags.vision, ...(process.env.JEVB_HAIKU != null ? { haiku: /^(1|true)$/i.test(process.env.JEVB_HAIKU) } : {}) }; break;
   case "act": args = { actions: parseAct(), values: values(), allow_irreversible: !!flags.allow }; break;
   case "observe": args = { mode: rest[0] || "full", query: rest.slice(1).join(" ") || undefined }; break;
   case "check": if (!rest.length) fail("check needs a question"); args = { question: rest.join(" "), vision: !!flags.vision }; break;

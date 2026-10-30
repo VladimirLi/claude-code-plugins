@@ -2,8 +2,9 @@
 // Each returns { text, image?, data } where `text` is what Claude reads.
 import { jev, stats } from "./jev.mjs";
 import { KEY_NAMES } from "./tab.mjs";
-import { brief, renderPage, renderDiff, pageDiff, diffForJev } from "./format.mjs";
+import { brief, elementLine, renderPage, renderDiff, pageDiff, diffForJev } from "./format.mjs";
 import { fence, scrub, secretsOf, redactValues, gateRule, dialogRisky, domainAllowed, REDACTED, SECRET_KEY } from "./safety.mjs";
+import { haiku, haikuOn, shouldEngage, outerLoop, HAIKU_MS } from "./haiku.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_SINGLE = 240, GROUP = 30, MAX_STATE_CHARS = 70_000;
@@ -424,14 +425,43 @@ export class Agent {
     return +(x.answers.action_done?.noul ?? 0).toFixed(2);
   }
 
-  // allow_irreversible also opens the page's submit guard (SUBMIT_GUARD) for this call only
+  // allow_irreversible also opens the page's submit guard (SUBMIT_GUARD) for this call only.
+  // The Haiku outer loop (opt-in) never runs with allow_irreversible: the caller's consent covers
+  // the caller's own goal, not sub-goals Haiku writes.
   async do(args) {
-    if (!args.allow_irreversible) return this.loop(args);
+    if (!args.allow_irreversible) return haikuOn(args) ? this.withHaiku(args) : this.loop(args);
     await this.tab.allowSubmits(true);
     try { return await this.loop(args); } finally { await this.tab.allowSubmits(false); }
   }
 
-  async loop({ goal, values = {}, max_actions, allow_irreversible = false, vision = false }) {
+  // The Haiku outer loop: a plain do first (the child warms up meanwhile); Haiku only when it
+  // fell short (see shouldEngage). One wall-clock budget covers the plain do and every sub-goal.
+  async withHaiku(args) {
+    const t0 = Date.now(), deadline = t0 + HAIKU_MS, child = haiku();
+    child.begin();
+    try {
+      const first = await this.loop({ ...args, deadline });
+      if (!shouldEngage(args.goal, first.data, first.text)) return first;
+      const r = await outerLoop({
+        goal: args.goal, values: args.values ?? {}, first, t0,
+        run: (goal, values, dl) => this.loop({ goal, values, vision: args.vision, deadline: dl }),
+        ask: (m, ms) => child.ask(scrub(m, this.secrets), ms),
+        page: async () => this.haikuPage(),
+      });
+      return this.out(r.text, r.data);
+    } finally { child.end(); }
+  }
+
+  // The short page view Haiku reads (fenced by the caller): no element table beyond what is in view.
+  haikuPage() {
+    const p = this.shown;
+    if (!p) return "";
+    const els = p.elements.filter((e) => !e.off && !e.hidden);
+    return [`url: ${p.url}`, `title: ${p.title}`, ...(p.dialogs?.length ? [`dialogs/overlays: ${p.dialogs.join(" || ").slice(0, 300)}`] : []),
+      `visible text: ${p.text.slice(0, 1200)}${p.text.length > 1200 ? " …" : ""}`, `elements in view (${Math.min(els.length, 50)} of ${p.elements.length}):`, ...els.slice(0, 50).map(elementLine)].join("\n");
+  }
+
+  async loop({ goal, values = {}, max_actions, allow_irreversible = false, vision = false, deadline }) {
     const t0 = Date.now(), calls0 = stats.calls, tab = this.tab;
     // The budget is a backstop, not the stop rule: the repeat checks, the wait time limit and
     // the fallback cap end bad runs. A fixed 10 cut saucedemo-coarse (11 actions) one click short.
@@ -685,14 +715,16 @@ export class Agent {
       }
       // budget reached: run this one action anyway (up to EXTRA_ROUNDS more) when it is a sure
       // step on a page that is still moving; otherwise hand it back as `next` for one act call
-      if (round >= limit) {
-        const sure = act.tool !== "none" && (a.tool?.probabilities?.[act.tool] ?? 0) >= 0.8 && (!TARGETED.has(act.tool) || act.p_target >= 0.8)
+      // `deadline` (the Haiku loop's wall-clock budget; unset otherwise) ends the run the same way
+      const late = deadline != null && Date.now() >= deadline;
+      if (round >= limit || late) {
+        const sure = !late && act.tool !== "none" && (a.tool?.probabilities?.[act.tool] ?? 0) >= 0.8 && (!TARGETED.has(act.tool) || act.p_target >= 0.8)
           && (seen.get(key) ?? 0) < 2 && !(repeatsBlock(seq, 2, 2) || repeatsBlock(seq, 3, 2) || repeatsBlock(seq, 1, 4))
           && rounds.slice(-2).some((x) => x.changed);
         if (sure && limit < max_actions + EXTRA_ROUNDS) { limit++; r.over_budget = true; }
         else {
           pending = { op: act.tool, id: act.target, element: brief(act.el), ...(act.valueKey && ["type", "select", "upload"].includes(act.tool) ? { value_key: act.valueKey } : {}), ...(act.tool === "select" && act.value != null ? { option: act.value } : {}), ...(act.key ? { key: act.key } : {}), ...(act.to != null ? { to: act.to } : {}) };
-          gate = "budget"; break;
+          gate = "budget"; if (late) info = "the call's time budget ran out"; break;
         }
       }
       const h = { action: act.tool, element: brief(act.el), id: act.target, url: page.url, tag: act.el?.tag, name: act.el?.text || act.el?.label };
