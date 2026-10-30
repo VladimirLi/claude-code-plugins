@@ -36,6 +36,7 @@ Config (`cfg["tts"]`), all optional:
     lead_frames cap on the leading pad token frames  default none (capping hurts the first word)
     threads     torch CPU threads                    default 8
     prewarm     synthesize OPENERS at start (cache)  default true
+    warm_text   throwaway piece warm() runs at a turn end   default "Okay."
     prewarm_dir saved OPENERS audio, reused next start  default ~/.claude/live-conversation/tts-cache
                 (keyed by this file, kokoro's version and the config; "" turns it off)
     cache_size  short pieces kept in the audio cache default 256
@@ -423,6 +424,18 @@ class KokoroTTS:
 
     async def close(self) -> None:
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+    async def warm(self) -> None:
+        """Run the model once on a short throwaway piece, so the reply's first piece finds it hot.
+
+        After 10-20 s idle the first piece takes 1.5-2x as long (measured 2026-10-30: median
+        ~505 ms against ~325 ms when a short piece ran ~0.6 s before; one outlier 1442 ms).
+        The orchestrator calls this at the turn end, when the brain still needs ~0.75 s or
+        more for its first word. Does nothing when a piece is being made or before start()."""
+        if self.model is None or self.lock.locked():
+            return
+        async with self.lock:
+            await self._run(self._synth, self.cfg.get("warm_text", "Okay."))
 
     async def synthesize(self, text: str) -> AsyncIterator[np.ndarray]:
         text = clean_text(text)

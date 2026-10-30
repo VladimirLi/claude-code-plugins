@@ -66,6 +66,9 @@ DEFAULTS = {
     "keepalive_after_ms": 4500.0,
     "keepalive_every_ms": 9000.0,
     # announce(): speak only after the conversation was free (no user speech, no reply) this long
+    # at a turn end, run the TTS model once on a throwaway piece so the reply's first piece
+    # does not pay for a model gone cold while the user talked (tts.warm)
+    "warm_tts": True,
     "announce_quiet_ms": 800.0,        # play the predicted filler at the turn end, not after the final transcript   # the brain hears which filler opened the reply, so it does not acknowledge twice
 }
 
@@ -234,9 +237,18 @@ class Orchestrator:
                     self.log.emit("turn_end_detected", self.label, source=d.source)
                     self._log_endpoint()
                     self._early_filler(self.label)
+                    self._warm_tts()                # after: a filler started there goes first
                     self._spawn(self._handle_turn(self.label, self.gen))
         # let a reply in flight finish its bookkeeping
         await asyncio.sleep(0)
+
+    def _warm_tts(self) -> None:
+        """Turn end: get the TTS model hot while the brain thinks (tts.warm), unless audio is
+        being made or played (then it is hot already, and a warm-up would queue in front)."""
+        warm = getattr(self.c.tts, "warm", None)
+        if warm is None or not self.ocfg["warm_tts"] or self.sink.is_playing() or self._reply_in_flight():
+            return
+        self._spawn(warm())
 
     def _log_endpoint(self) -> None:
         tr = getattr(self.c.endpointer, "trace", None)

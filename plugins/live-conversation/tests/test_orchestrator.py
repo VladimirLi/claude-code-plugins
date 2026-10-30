@@ -205,6 +205,59 @@ class TestEarlyFiller(unittest.TestCase):
         asyncio.run(go())
 
 
+class WarmTTS(FakeTTS):
+    def __init__(self, delay=0.05):
+        super().__init__(delay)
+        self.warmed = 0
+
+    async def warm(self):
+        self.warmed += 1
+
+
+class TurnEndEndpointer(Nop):
+    """speech_start on the first frame, turn_end on the second."""
+    def __init__(self):
+        self.n = 0
+        self.trace = []
+
+    def feed(self, frame, t_ms):
+        from live.endpointing import Decision
+        self.n += 1
+        return [Decision("speech_start", t_ms)] if self.n == 1 else \
+            [Decision("turn_end", t_ms, "semantic_yield")] if self.n == 2 else []
+
+
+class FrameAudio(FakeAudio):
+    async def frames(self):
+        for _ in range(3):
+            self.clock.advance(FRAME)
+            yield np.zeros(FRAME, np.int16)
+            await asyncio.sleep(0)
+        self.done = True
+
+
+class TestWarmTTS(unittest.TestCase):
+    def _run(self, fillers):
+        async def go():
+            log = EventLog(Clock())
+            audio = FrameAudio(log)
+            c = Components(endpointer=TurnEndEndpointer(), stt=FakeSTT("What's going on?"), brain=FakeBrain(delay=0.05),
+                           tts=WarmTTS(0.0), bargein=Nop(), turntaking=TurnTaking({"fillers": fillers}))
+            c.endpointer.trace = [{"pause_start_ms": 0.0, "text": "What's going on?", "class": "yield"}]
+            o = Orchestrator(audio, log, c, {})
+            await o.run()
+            await asyncio.sleep(0.2)
+            return c.tts.warmed
+        return asyncio.run(go())
+
+    def test_turn_end_warms_the_model(self):
+        # 2026-10-30: after 10-20 s idle Kokoro took ~505 ms for the first piece, ~325 ms warmed
+        self.assertEqual(self._run(fillers=False), 1)
+
+    def test_no_warm_up_in_front_of_a_filler(self):
+        self.assertEqual(self._run(fillers=True), 0)
+
+
 class TestKeepalive(unittest.TestCase):
     def test_long_silence_in_reply_gets_a_holding_line(self):
         async def go():
