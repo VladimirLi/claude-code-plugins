@@ -147,7 +147,15 @@ cancelled and the two parts are merged into one turn; if not (noise, a breath),
 the held reply plays and is not restarted (`x_resume` hold / kept / merged).
 A hold lasts at most `hold_max_ms` (1.5 s) unless an interim transcript of the
 sound had words: then the reply plays (`x_resume` released). If the final still
-has words, the playing reply is stopped and the parts are merged.
+has words, the playing reply is stopped and the parts are merged. The cap and
+the words check start again for each new sound that re-holds the reply. A late
+wordless final of an older sound never restarts a reply made from a newer one.
+A barge-in that stops a filler keeps the question as carry; if no speech_start
+follows within `short_bargein_ms` (a 40-59 ms sound is too short for the
+endpointer), the question is answered (`x_resume` short_bargein_reasked). Each
+new reply logs its own `first_reply_audio`, also under a label an earlier reply
+used; a turn that gets a new label at its final logs `turn_end_detected` again
+(`source: relabel`).
 
 e2e wiring (see the module docstring): `build()` applies `E2E_OVERLAY` under each
 module section (a key in the config still wins), today the on-device endpointer

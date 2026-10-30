@@ -436,5 +436,54 @@ class TestBuffer(unittest.TestCase):
         self.assertEqual(join_text([" a ", "", None, "b"]), "a b")
 
 
+
+class EchoSTT(FakeSTT):
+    """Like gpt-4o-mini-transcribe: a clip with no speech returns the prompt word for word."""
+
+    def _transcribe(self, audio, prompt=None):
+        t = super()._transcribe(audio, prompt)
+        return (prompt or "") if t == "w0" else t
+
+
+class TestPromptEcho(unittest.TestCase):
+    """Session 20261030-110521 at 250 s: after a long turn's chunk was committed, the near-silent
+    tail was sent with the chunk text as prompt and Azure returned the prompt: the sentence twice."""
+
+    def test_late_final_after_commit_does_not_echo_prompt(self):
+        async def go():
+            s = EchoSTT({"chunk_min_s": 0.5})
+            await feed(s, [QUIET] * 20)
+            s.begin()
+            await feed(s, [LOUD] * 30 + [QUIET] * 25)   # long turn, a pause: its spec job is the chunk
+            await asyncio.sleep(0.1)
+            await feed(s, [LOUD] * 3)                    # the next utterance's first frames commit it
+            s.begin()                                    # speech_start before the turn end's finalize
+            return await s.finalize()
+        self.assertEqual(run(go()), "w30")
+
+    def test_breath_in_pause_after_commit_does_not_echo_prompt(self):
+        async def go():
+            s = EchoSTT({"chunk_min_s": 0.5})
+            await feed(s, [QUIET] * 20)
+            s.begin()
+            await feed(s, [LOUD] * 30 + [QUIET] * 10)
+            await asyncio.sleep(0.1)
+            breath = (np.sin(np.arange(FRAME) / 5) * 1500).astype(np.int16)   # above the speech level, no word
+            await feed(s, [breath] + [QUIET] * 30)
+            await asyncio.sleep(0.1)
+            return await s.finalize()
+        self.assertEqual(run(go()), "w30")
+
+    def test_echo_check(self):
+        from live.stt import echoes_prompt
+        p = "And you should also listen to me, but you shouldn't do the work yourself."
+        self.assertTrue(echoes_prompt(p, p))
+        self.assertTrue(echoes_prompt("but you shouldn't do the work yourself", p))
+        self.assertFalse(echoes_prompt("yourself.", p))              # short: could be said again
+        self.assertFalse(echoes_prompt("and try to figure out the issues", p))
+        self.assertFalse(echoes_prompt("Yes.", None))
+        self.assertTrue(echoes_prompt("Yes.", "yes"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,7 @@ import http.client
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -82,6 +83,20 @@ def wav_bytes(x: np.ndarray, sr: int = SR) -> bytes:
         w.setframerate(sr)
         w.writeframes(x.astype("<i2").tobytes())
     return b.getvalue()
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower())
+
+
+def echoes_prompt(text: str, prompt: Optional[str]) -> bool:
+    """True when a transcript only repeats its prompt. gpt-4o-mini-transcribe answers a near-silent
+    clip (the pause after a chunk was committed) with the prompt word for word, and the user's last
+    sentence then appeared twice in the final (session 20261030-110521, 250 s)."""
+    w, p = _words(text), _words(prompt)
+    if not w or not p or len(w) > len(p):
+        return False
+    return p[len(p) - len(w):] == w and (len(w) >= 3 or len(w) == len(p))
 
 
 def join_text(parts: list[str]) -> str:
@@ -174,6 +189,7 @@ class SpeculativeSTT(BaseSTT):
         "final_timeout_ms": 4000.0,  # finalize() never waits longer; then the best text so far
         "warm_timeout_s": 8.0,       # start() never waits longer for the warm-up requests
         "late_final_s": 2.0,         # a frozen utterance (begin() before its finalize()) is kept this long
+        "echo_speech_ms": 300.0,     # a clip with less speech than this whose text repeats the prompt is empty
     }
 
     def __init__(self, cfg: Optional[dict] = None) -> None:
@@ -314,7 +330,16 @@ class SpeculativeSTT(BaseSTT):
     def _safe_transcribe(self, audio: np.ndarray, prompt: Optional[str]) -> str:
         if len(audio) < SR // 10:
             return ""
-        return self._transcribe(audio, prompt).strip()
+        text = self._transcribe(audio, prompt).strip()
+        if prompt and echoes_prompt(text, prompt) and self._speech_ms(audio) < self.p["echo_speech_ms"]:
+            return ""                      # a near-silent clip answered with its prompt
+        return text
+
+    def _speech_ms(self, audio: np.ndarray) -> float:
+        """How much of a clip is above the speech level."""
+        th = self.threshold()
+        n = int(SR * FRAME_MS / 1000)
+        return FRAME_MS * sum(1 for i in range(0, len(audio) - n + 1, n) if dbfs(audio[i:i + n]) > th)
 
     def _on_done(self, j: Job) -> None:
         if j.fut.cancelled() or j.fut.exception() is not None:
