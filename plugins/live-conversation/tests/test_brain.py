@@ -3,6 +3,7 @@
 Uses tests/fake_claude.py instead of the real CLI, so they run offline in about 3 s.
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -212,6 +213,50 @@ class TestToolBudget(unittest.TestCase):
         text, n = run(go())
         self.assertEqual(n, 0)
         self.assertEqual(" ".join(text.split()), "Handing that to Claude Code. Task one.")
+
+    def test_one_slow_tool_call_is_stopped_by_the_time_budget(self):
+        # tool_budget_s was only checked when a tool block ended: one 40 s Bash call meant 40 s of silence
+        async def go():
+            b = fake_brain(tool_budget=10, tool_budget_s=0.5)
+            await b.start()
+            t0 = time.monotonic()
+            text = "".join([d async for d in b.respond("run the slow command")])
+            dt = time.monotonic() - t0
+            n = b.session.nudges
+            await b.close()
+            return text, dt, n
+        text, dt, n = run(go())
+        self.assertEqual(n, 1)
+        self.assertLess(dt, 2.0)                 # not the 4 s the tool runs
+        self.assertTrue(text.startswith("Let me check."))
+
+    def test_reading_or_grepping_live_task_is_not_a_handoff(self):
+        # a Read of bin/live-task or a Grep for "live-task" turned the whole budget off (bug: substring match)
+        from live.brain import _Turn
+        async def go():
+            q = asyncio.Queue()
+            t = _Turn(q, tool_budget=2, tool_budget_s=8)
+            t._tool_done(json.dumps({"file_path": "/repo/plugins/live-conversation/bin/live-task"}), "Read")
+            t._tool_done(json.dumps({"pattern": "live-task", "path": "live"}), "Grep")
+            t._tool_done(json.dumps({"command": "grep -rn live-task live"}), "Bash")
+            t.finish()
+            return t, q
+        t, q = run(go())
+        self.assertFalse(t.handed_off)
+        self.assertTrue(t.over)
+
+    def test_handoff_command_forms(self):
+        from live import tasks
+        from live.brain import is_handoff
+        def bash(c):
+            return json.dumps({"command": c})
+        cmd = tasks.command("/a b/python", "/a b/bin/live-task", "/tmp/run dir")
+        self.assertTrue(is_handoff("Bash", bash(cmd + ' "Fix the test; then commit"')))
+        self.assertTrue(is_handoff("Bash", bash("cd /x && python3 bin/live-task --status")))
+        self.assertTrue(is_handoff("Bash", bash("/p/bin/live-task --run-dir /r 'x'")))
+        self.assertFalse(is_handoff("Bash", bash("cat bin/live-task")))
+        self.assertFalse(is_handoff("Bash", bash("ls bin | grep live-task")))
+        self.assertFalse(is_handoff("Read", json.dumps({"file_path": "/p/bin/live-task"})))
 
     def test_budget_off(self):
         async def go():

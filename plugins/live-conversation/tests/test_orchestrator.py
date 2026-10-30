@@ -459,5 +459,197 @@ class TestHoldCap(unittest.TestCase):
         asyncio.run(go())
 
 
+
+class SlowFirstSTT(FakeSTT):
+    """The first segment's final is slow; a later short segment's final ('') comes back first."""
+
+    def __init__(self, first, later=("",), delay=0.2):
+        super().__init__("")
+        self.first, self.later, self.delay, self.n = first, list(later), delay, 0
+
+    async def finalize(self):
+        self.n += 1
+        if self.n == 1:
+            await asyncio.sleep(self.delay)
+            return self.first
+        return self.later.pop(0)
+
+
+def _voiced(i, on, db=-35.0, rng=np.random.default_rng(0)):
+    """One frame of a 150 Hz harmonic sound (voiced noise or quiet speech) over a -65 dB floor."""
+    t = (np.arange(FRAME) + i * FRAME) / SR
+    n = rng.normal(0, 1, FRAME) * 10 ** (-65 / 20)
+    if on:
+        x = sum(np.sin(2 * np.pi * 150 * k * t) / k for k in range(1, 20))
+        n = n + x / np.max(np.abs(x)) * 10 ** (db / 20)
+    return (n * 32767).astype(np.int16)
+
+
+class TestHoldEdges(unittest.TestCase):
+    """Holds and releases of a reply over a sound that came after the user's turn (bar issue 1)."""
+
+    def test_no_hold_on_a_segment_whose_final_already_came_back(self):
+        # G1's final is slow; noise segment G2 starts and ends and its '' comes back first. The reply
+        # to G1 was held on G2, whose final never comes again: silent until hold_max_ms (or forever at 0).
+        async def go():
+            o, log = make_resume([], hold_max_ms=0.0)
+            o.c.stt = SlowFirstSTT("What are you doing?")
+            o._on_speech_start()
+            o.in_user_turn = False
+            t1 = asyncio.create_task(o._handle_turn(o.label, o.gen))
+            await asyncio.sleep(0.02)
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)            # G2's final '' first
+            await t1                                        # then G1's
+            self.assertIsNotNone(o.reply)
+            self.assertIsNone(o.reply.held)
+            await asyncio.wait_for(o.reply_task, 2)
+            self.assertTrue(o.reply.content_started)
+            self.assertEqual([t for t, _ in o.c.brain.calls], ["What are you doing?"])
+        asyncio.run(go())
+
+    def test_words_of_a_segment_that_came_back_first_join_the_turn(self):
+        async def go():
+            o, log = make_resume([], hold_max_ms=0.0)
+            o.c.stt = SlowFirstSTT("What are you doing?", later=["Right now?"])
+            o._on_speech_start()
+            o.in_user_turn = False
+            t1 = asyncio.create_task(o._handle_turn(o.label, o.gen))
+            await asyncio.sleep(0.02)
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            await t1
+            await asyncio.wait_for(o.reply_task, 2)
+            self.assertIsNone(o.reply.held)
+            self.assertEqual(o.c.brain.calls[-1][0], "What are you doing? Right now?")
+            self.assertEqual(len([r for r in o.replies if r.content_started]), 1)
+        asyncio.run(go())
+
+    def _released(self, finals, cap=200.0):
+        """The reply to the first final is held on a sound, then let go by hold_max_ms and plays."""
+        async def setup():
+            o, log = make_resume(finals, brain_delay=0.05, hold_max_ms=cap)
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            o._on_speech_start()
+            o._on_interim("")
+            self.assertIsNotNone(r.held)
+            o.clock.advance(SR)                              # the hold runs out over the sound
+            while not r.content_started:
+                await asyncio.sleep(0.01)
+            return o, log, r
+        return setup
+
+    def test_released_reply_cut_by_its_own_sound_is_answered_after_an_empty_final(self):
+        # The barge-in rules stopped the released reply on the same sound; its final was '' and the
+        # question was never answered.
+        async def go():
+            o, log, r = await self._released(["What are you doing?", ""])()
+            o._barge_in()
+            self.assertIsNone(o.reply)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            self.assertIsNotNone(o.reply)
+            await asyncio.wait_for(o.reply_task, 2)
+            calls = o.c.brain.calls
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1][0], "What are you doing?")
+            self.assertIsNotNone(calls[1][1])                # told it was interrupted
+            self.assertTrue(o.reply.content_started)
+        asyncio.run(go())
+
+    def test_released_reply_cut_by_words_merges_them_with_the_question(self):
+        async def go():
+            o, log, r = await self._released(["What are you doing?", "And why?"])()
+            o._barge_in()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            await asyncio.wait_for(o.reply_task, 2)
+            self.assertEqual(o.c.brain.calls[1][0], "What are you doing? And why?")
+        asyncio.run(go())
+
+    def test_released_reply_is_not_barged_in_on_at_once_by_the_sound_it_plays_over(self):
+        # Real BargeIn: the episode of the held sound carried over to the reply's first frame and the
+        # "long" rule fired 20 ms after the reply audio began.
+        from live.bargein import BargeIn
+
+        async def go():
+            o, log = make_resume(["What are you doing?", ""], brain_delay=0.05, hold_max_ms=1500.0)
+            o.c.bargein = BargeIn(None)
+            o.c.brain.reply = "First sentence here. Second sentence follows now. Third one."
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            o._on_speech_start()
+            o._on_interim("")
+            t, fired, first_audio = 0.0, None, None
+            for i in range(1, 200):                          # up to 4 s: 300 ms on, 100 ms off
+                on = (t % 400) < 300
+                t += FRAME * 1000.0 / SR
+                o.clock.advance(FRAME)
+                holds = o._assistant_holds_floor()
+                if holds and first_audio is None:
+                    first_audio = t
+                if o.c.bargein.feed(_voiced(i, on), t, holds) == "barge_in":
+                    fired = t
+                    o._barge_in()
+                    break
+                await asyncio.sleep(0.005)
+            self.assertIsNotNone(first_audio)
+            if fired is not None:
+                self.assertGreaterEqual(fired - first_audio, 500.0)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)             # the sound's final: ''
+            if o.reply_task is not None:
+                await asyncio.wait_for(o.reply_task, 3)
+            answered = (fired is None and r.content_started and not r.interrupted) or len(o.c.brain.calls) == 2
+            self.assertTrue(answered, "the question was left unanswered")
+        asyncio.run(go())
+
+    def test_backchannel_after_a_released_hold_keeps_the_reply(self):
+        # "Okay." in the same segment stopped the reply, marked all of it interrupted and asked again.
+        async def go():
+            o, log, r = await self._released(["What is the capital of Australia?", "Okay."])()
+            await o.reply_task
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            return o, r
+        o, r = asyncio.run(go())
+        self.assertEqual(len(o.c.brain.calls), 1)
+        self.assertFalse(r.interrupted)
+
+    def test_backchannel_while_the_released_reply_plays_keeps_it(self):
+        async def go():
+            o, log, r = await self._released(["What is the capital of Australia?", "Mm-hmm."])()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            self.assertIs(o.reply, r)
+            await o.reply_task
+            return o, r
+        o, r = asyncio.run(go())
+        self.assertEqual(len(o.c.brain.calls), 1)
+        self.assertFalse(r.interrupted)
+
+    def test_question_after_the_released_reply_played_is_a_new_turn(self):
+        async def go():
+            o, log, r = await self._released(["What is the capital of Australia?", "And of Canada?"])()
+            await o.reply_task
+            o.clock.advance(5 * SR)                          # played to the end
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            await o.reply_task
+            return o, r
+        o, r = asyncio.run(go())
+        self.assertEqual([t for t, _ in o.c.brain.calls], ["What is the capital of Australia?", "And of Canada?"])
+        self.assertIsNone(o.c.brain.calls[1][1])
+        self.assertFalse(r.interrupted)
+        self.assertEqual(o.user_turns[r.turn], "What is the capital of Australia?")
+
+
 if __name__ == "__main__":
     unittest.main()

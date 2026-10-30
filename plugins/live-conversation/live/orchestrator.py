@@ -40,7 +40,7 @@ from typing import Optional
 
 import numpy as np
 
-from .bargein import BargeIn
+from .bargein import BargeIn, is_backchannel
 from .brain import Brain, Interrupted
 from .endpointing import Endpointer
 from .events import SR, EventLog
@@ -122,6 +122,7 @@ class Reply:
     held_since: float = 0.0                        # session clock when the hold began
     held_words: bool = False                       # an interim of the held sound had words
     released_gen: int = -1                         # segment whose hold ran out (hold_max_ms) before its final
+    released_ms: float = 0.0                       # session clock when that hold ran out
     carries: list = field(default_factory=list)    # unheard announcements this reply delivers
 
 
@@ -150,6 +151,8 @@ class Orchestrator:
         self.reply_task: Optional[asyncio.Task] = None
         self.pending_interrupt: Optional[Interrupted] = None
         self.unheard: list[dict] = []                  # announcements cut before any content: {prompt, by: replies}
+        self.finals: dict[int, str] = {}               # segment gen -> its final text, once it came back
+        self.cut_released: Optional[Reply] = None      # a released reply stopped by a barge-in in its own segment
         self.tasks: set = set()
         self.user_turns: dict = {}
         self.replies: list[Reply] = []
@@ -497,9 +500,39 @@ class Orchestrator:
             self.log.emit("final_transcript", label, text=full)
             self.c.endpointer.on_transcript(full, True)
             self.c.bargein.on_transcript(full)
+        self.finals[gen] = text
+        for g in [g for g in self.finals if g < gen - 20]:
+            del self.finals[g]
         early = self._take_early(label)
         rr = self.reply
+        cut = self.cut_released
+        if cut is not None and cut.released_gen == gen and rr is None and early is None:
+            # The reply was let go over this segment's sound (hold_max_ms) and a barge-in in the same
+            # segment stopped it. The final says what that sound was: no words, the question still
+            # needs its answer; words, one turn with the question, as before any reply audio.
+            self.cut_released = None
+            norm = normalize(text)
+            words = bool(norm) and not is_hesitation(norm)
+            self.log.emit("x_resume", label, decision="cut_merged" if words else "cut_reasked", text=text)
+            full = (cut.user_text + " " + full).strip() if words else cut.user_text
+            if cut.turn is not None and cut.turn != label:
+                self.user_turns.pop(cut.turn, None)
         held = rr if (rr is not None and (rr.held is not None or rr.released_gen == gen)) else None
+        if (held is not None and early is None and held.held is None and held.audio_started
+                and held.released_gen == gen):
+            # Released over this segment's sound and playing (or played). The final has words now.
+            # A backchannel ("okay") or a final that comes after the whole reply was heard is not
+            # an interruption of it: the reply stands, and a new question is a turn of its own.
+            norm = normalize(text)
+            if norm and not is_hesitation(norm) and is_backchannel(text):
+                self.log.emit("x_resume", label, decision="kept", text=text)
+                return
+            if (self.reply_task is None or self.reply_task.done()) and not self.sink.is_playing():
+                held.released_gen = -1
+                if label == held.turn and self.audio.turn_hint() is None:
+                    self.counter += 1           # the hold kept the reply's label; this is a new turn
+                    label = self.label = self.counter
+                held = None
         if held is not None and early is None:
             norm = normalize(text)
             if not norm or is_hesitation(norm):
@@ -522,6 +555,21 @@ class Orchestrator:
                 self.pending_interrupt = Interrupted(spoken)
             self._cancel_reply(keep_record=False)
             self.reply_task = None
+        if gen != self.gen and early is None and all(g in self.finals for g in range(gen + 1, self.gen + 1)):
+            # Every newer segment's final came back before this one (a short noise returns '' at
+            # once while this turn's tail is still being transcribed). Nothing would release a hold
+            # on them, so this turn is the current one; words in them join it.
+            later = " ".join(self.finals[g] for g in range(gen + 1, self.gen + 1)
+                             if normalize(self.finals[g]) and not is_hesitation(normalize(self.finals[g])))
+            if later:
+                full = (full + " " + later).strip()
+                lr = self.reply
+                if lr is not None and lr.turn != label and not lr.audio_started:
+                    if lr.turn is not None:
+                        self.user_turns.pop(lr.turn, None)
+                    self._cancel_reply(keep_record=False)
+                    self.reply_task = None
+            gen = self.gen
         hold_gen = None
         if (gen != self.gen and early is None
                 and self.c.turntaking.on_user_resumed(TurnContext(full)) == "merge"):
@@ -543,10 +591,13 @@ class Orchestrator:
             if early is not None:
                 self._stop_early(early)
             return
-        if self.reply_task and not self.reply_task.done():
+        inflight = self.reply if self.reply_task and not self.reply_task.done() else None
+        if inflight is not None:
             self._cancel_reply(keep_record=True)
         r = Reply(label, full, decided_ms=early["t_ms"] if early else self.clock.ms)
-        r.carries = list(self.unheard)
+        # an announcement an earlier reply already told (heard, and done playing) is not news again
+        r.carries = [u for u in self.unheard
+                     if not any(x is not inflight and self._heard(x) for x in u["by"])]
         for u in r.carries:
             u["by"].append(r)
         if early is not None:
@@ -763,6 +814,12 @@ class Orchestrator:
             elif left <= 0:
                 self.log.emit("x_resume", r.turn, decision="released", held_ms=round(self.clock.ms - r.held_since))
                 r.released_gen = r.held_gen
+                r.released_ms = self.clock.ms
+                # The reply now plays over this sound on purpose: the barge-in evidence gathered
+                # before (carried over when a reply starts over ongoing speech) does not count.
+                reset = getattr(self.c.bargein, "reset", None)
+                if reset is not None:
+                    reset()
                 self._release(r)
             else:
                 try:
@@ -801,6 +858,9 @@ class Orchestrator:
             self._cancel_reply(keep_record=True)
             return
         self.pending_interrupt = Interrupted(spoken)
+        if r.released_gen == self.gen and not r.announce:
+            # it was let go over this very segment's sound: its final decides what comes next
+            self.cut_released = r
         self._cancel_reply(keep_record=True)
 
     # -- announcements: speaking without a user turn ---------------------------

@@ -35,6 +35,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
@@ -96,6 +97,40 @@ NUDGE_ANSWER = ("[Note from the call: you are working with your own tools for to
                 "silence. Stop using tools. Tell the user in two short sentences what you found so far.]")
 HANDOFF_MARK = "Handing work to Claude Code"     # heading of tasks.handoff_prompt()
 _OVER = object()                                 # queue item: the reply went over its tool budget
+
+
+def is_handoff(name: str, tool_input: str) -> bool:
+    """Is this tool call the live-task handoff? Only a Bash command that runs live-task (directly,
+    through python, or after `cd x &&`) is. Reading bin/live-task or grepping for "live-task"
+    is the brain's own digging and counts against its tool budget."""
+    if name != "Bash":
+        return False
+    try:
+        cmd = json.loads(tool_input or "{}").get("command") or ""
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        tokens = cmd.split()
+    parts, cur = [], []
+    for t in tokens:
+        if t and set(t) <= set(";&|()\n"):
+            parts.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    parts.append(cur)
+    for words in parts:
+        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in ("env", "exec", "uv", "run")):
+            words = words[1:]
+        if words and os.path.basename(words[0]).startswith("python") and len(words) > 1:
+            words = words[1:]
+        if words and os.path.basename(words[0]) == "live-task":
+            return True
+    return False
 
 
 @dataclass
@@ -214,6 +249,10 @@ class _Turn:
         self.handed_off = False
         self.over = False
         self.tool_input: Optional[list[str]] = None   # input JSON of the tool block being streamed
+        self.tool_name = ""                       # name of that tool ("Bash", "Read" ...)
+        self.in_tool = False                      # a tool call ended and nothing came after it yet: it runs
+        self.timer: Optional[asyncio.TimerHandle] = None   # tool_budget_s deadline while a tool runs
+        self.done = False
         self.got_text = False
         self.after_tool = False
         self.in_text = False
@@ -258,6 +297,7 @@ class _Turn:
         et = ev.get("type")
         if et == "content_block_start":
             kind = ev.get("content_block", {}).get("type")
+            self.in_tool = False
             if not self.started.is_set():
                 self.started_at = time.monotonic()
                 self.first_kind = kind
@@ -276,12 +316,14 @@ class _Turn:
                     self._drop_or_release()
                 self.after_tool = True
                 self.tool_input = []
+                self.tool_name = ev.get("content_block", {}).get("name") or ""
         elif et == "content_block_delta" and ev.get("delta", {}).get("type") == "input_json_delta":
             if self.tool_input is not None:
                 self.tool_input.append(ev["delta"].get("partial_json") or "")
         elif et == "content_block_stop" and self.tool_input is not None:
-            self._tool_done("".join(self.tool_input))
+            self._tool_done("".join(self.tool_input), self.tool_name)
             self.tool_input = None
+            self.in_tool = True
         elif et == "content_block_delta" and ev.get("delta", {}).get("type") == "text_delta":
             t = ev["delta"]["text"]
             if self.held is not None:
@@ -311,10 +353,11 @@ class _Turn:
             if self.held_closed and (et == "message_stop" or ev.get("delta", {}).get("stop_reason") != "tool_use"):
                 self._release()
 
-    def _tool_done(self, tool_input: str) -> None:
+    def _tool_done(self, tool_input: str, name: str = "") -> None:
         """A tool call is complete (it runs next). Past the budget, ask the reader to stop the reply."""
-        if "live-task" in tool_input:
+        if is_handoff(name, tool_input):
             self.handed_off = True
+            self._stop_timer()
         if self.handed_off or self.over or self.tool_budget <= 0:
             return
         now = time.monotonic()
@@ -322,10 +365,37 @@ class _Turn:
         if self.first_tool is None:
             self.first_tool = now
         if self.tools > self.tool_budget or (self.tool_budget_s > 0 and now - self.first_tool >= self.tool_budget_s):
-            self.over = True
-            self.q.put_nowait(_OVER)
+            self._go_over()
+        elif self.tool_budget_s > 0 and self.timer is None:
+            # One tool call can run for a minute and send nothing meanwhile: the time budget
+            # must not wait for the next tool block to be checked.
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self.timer = loop.call_at(loop.time() + self.first_tool + self.tool_budget_s - now, self._time_up)
+
+    def _time_up(self) -> None:
+        self.timer = None
+        if self.done or self.handed_off or self.over:
+            return
+        if self.in_tool:
+            self._go_over()
+        # else the brain is writing again; the next tool call checks the time
+
+    def _go_over(self) -> None:
+        self._stop_timer()
+        self.over = True
+        self.q.put_nowait(_OVER)
+
+    def _stop_timer(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
 
     def finish(self) -> None:
+        self.done = True
+        self._stop_timer()
         if self.held:
             self._release()
         if not self.started.is_set():

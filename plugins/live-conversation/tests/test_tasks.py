@@ -198,6 +198,38 @@ class TestAnnounce(unittest.TestCase):
             self.assertEqual(len([e for e in log.events if e.event == "x_announce_delivered"]), 1)
         asyncio.run(go())
 
+    def test_result_heard_in_one_reply_is_not_carried_by_the_next(self):
+        # The user spoke again within announce_quiet_ms of the carrying reply's end: the next reply
+        # carried the same result again, and the brain told it a second time (bar issue 5).
+        async def go():
+            o, log, audio = make()
+            o.ocfg["announce_quiet_ms"] = 800
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 5 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o._on_speech_start()
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)                # "hi" carries the result
+            r1 = o.reply
+            await o.reply_task
+            await asyncio.sleep(0.2)                            # the user talks again 200 ms later
+            o._on_speech_start()
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            await o.reply_task
+            await asyncio.wait_for(a, 5)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertTrue(o._heard(r1))
+            self.assertEqual(sum(p.startswith(ANNOUNCE_CARRY_NOTE) for p in prompts), 1)
+            self.assertEqual(prompts[-1], "hi")
+            self.assertEqual(len([e for e in log.events if e.event == "x_announce_delivered"]), 1)
+        asyncio.run(go())
+
     def test_carrying_reply_cut_early_does_not_count_as_heard(self):
         async def go():
             o, log, audio = make()

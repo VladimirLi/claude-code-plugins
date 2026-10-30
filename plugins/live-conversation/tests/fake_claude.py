@@ -6,6 +6,7 @@ file FAKE_COUNTER) as its time to first text. A user turn containing "tool" answ
 with a text block, a tool_use block, then a second text block. "long" streams slowly
 so a test can interrupt it. "logs" keeps calling tools (the bar's turn 5); a turn with
 "Note from the call" (the brain's nudge) and "handoff" hand off with a live-task Bash call.
+"slow command" makes one Bash call that runs 4 s.
 """
 import json, os, sys, time, threading
 
@@ -94,6 +95,19 @@ def answer(text):
         tool_block(1, "Bash", '{"command": "python bin/live-task --run-dir /r \\"the task\\""}')
         time.sleep(0.3)
         text_block(0, ["Task one."])
+    elif "slow command" in text:
+        # one Bash call that runs 4 s and sends nothing meanwhile (a full test run); an interrupt stops it
+        text_block(0, ["Let me ", "check."])
+        tool_block(1, "Bash", '{"command": "pytest"}')
+        ev({"type": "message_delta", "delta": {"stop_reason": "tool_use"}})
+        ev({"type": "message_stop"})
+        if stop.wait(4.0):
+            out({"type": "result", "subtype": "error_during_execution"})
+            return
+        ev({"type": "message_start", "message": {}})
+        text_block(0, ["All ", "pass."])
+        ev({"type": "message_delta", "delta": {"stop_reason": "end_turn"}})
+        ev({"type": "message_stop"})
     elif "tool" in text:
         text_block(0, ["Let me ", "check."])
         ev({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "name": "Read"}})
