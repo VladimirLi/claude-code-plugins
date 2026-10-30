@@ -72,7 +72,8 @@ fits what they meant.
 Doing work with tools:
 - Never start a reply with a tool call: the user would hear dead silence. Always write one short \
 sentence first that you're on it ("Let me take a look.", "Okay, running them now."), then use the tools without narrating each step, then give the result in two or three short spoken \
-sentences: the answer and what matters, not everything you saw. Look only at the few things you need.
+sentences: the answer and what matters, not everything you saw. Look only at the few things you need: \
+one or two quick tool calls, never a long search. The user hears silence while tools run.
 
 The conversation:
 - The user's words come from speech recognition, so read them charitably.
@@ -85,6 +86,16 @@ Treat them as things you said, and never mention the note."""
 
 WARM_TEXT = "(Audio check before the call starts. Reply with only the word: ready)"
 PROBE_TEXT = "(Audio check {n}. Reply with only the word: ready)"
+
+
+# what the brain is told when a reply went over its tool budget (see DEFAULTS tool_budget)
+NUDGE_HANDOFF = ("[Note from the call: you are working with your own tools for too long and the user hears "
+                 "silence. Stop now. Hand the whole task to Claude Code with the live-task command, and say so "
+                 "in one short sentence first. Don't do any more of the work yourself.]")
+NUDGE_ANSWER = ("[Note from the call: you are working with your own tools for too long and the user hears "
+                "silence. Stop using tools. Tell the user in two short sentences what you found so far.]")
+HANDOFF_MARK = "Handing work to Claude Code"     # heading of tasks.handoff_prompt()
+_OVER = object()                                 # queue item: the reply went over its tool budget
 
 
 @dataclass
@@ -102,6 +113,11 @@ DEFAULTS = {
     "fast_ms": 900,
     "race": 2,                   # warm processes kept; each turn goes to all, the first to start wins
     "narrate_after_s": 6.0,      # after a tool call, speak a narration line only after this much silence
+    # A reply that keeps working with its own tools leaves the user in silence. Past this many tool
+    # calls (or this many seconds after the first one) the reply is interrupted and the brain is told
+    # to hand the work to Claude Code (live-task), or, without a handoff, to say what it has. 0 = off.
+    "tool_budget": 2,
+    "tool_budget_s": 8.0,
     "effort": "low",             # low effort mostly skips adaptive thinking (0.3-1 s before the first word)
     "disable_hooks": True,       # hooks of installed mods must not delay or alter voice turns
     "clean": True,               # strip markdown that slips through (see spoken())
@@ -186,9 +202,17 @@ class _Turn:
       and is dropped, unless nothing was said for narrate_after_s, so a long task
       still gets one progress line."""
 
-    def __init__(self, q: asyncio.Queue, narrate_after_s: float = 6.0) -> None:
+    def __init__(self, q: asyncio.Queue, narrate_after_s: float = 6.0, tool_budget: int = 0,
+                 tool_budget_s: float = 0.0) -> None:
         self.q = q
         self.narrate_after_s = narrate_after_s
+        self.tool_budget = tool_budget
+        self.tool_budget_s = tool_budget_s
+        self.tools = 0                            # own tool calls so far (not the live-task handoff)
+        self.first_tool: Optional[float] = None
+        self.handed_off = False
+        self.over = False
+        self.tool_input: Optional[list[str]] = None   # input JSON of the tool block being streamed
         self.got_text = False
         self.after_tool = False
         self.in_text = False
@@ -241,6 +265,13 @@ class _Turn:
                 if self.held_closed:
                     self._drop_or_release()
                 self.after_tool = True
+                self.tool_input = []
+        elif et == "content_block_delta" and ev.get("delta", {}).get("type") == "input_json_delta":
+            if self.tool_input is not None:
+                self.tool_input.append(ev["delta"].get("partial_json") or "")
+        elif et == "content_block_stop" and self.tool_input is not None:
+            self._tool_done("".join(self.tool_input))
+            self.tool_input = None
         elif et == "content_block_delta" and ev.get("delta", {}).get("type") == "text_delta":
             t = ev["delta"]["text"]
             if self.held is not None:
@@ -270,6 +301,20 @@ class _Turn:
             if self.held_closed and (et == "message_stop" or ev.get("delta", {}).get("stop_reason") != "tool_use"):
                 self._release()
 
+    def _tool_done(self, tool_input: str) -> None:
+        """A tool call is complete (it runs next). Past the budget, ask the reader to stop the reply."""
+        if "live-task" in tool_input:
+            self.handed_off = True
+        if self.handed_off or self.over or self.tool_budget <= 0:
+            return
+        now = time.monotonic()
+        self.tools += 1
+        if self.first_tool is None:
+            self.first_tool = now
+        if self.tools > self.tool_budget or (self.tool_budget_s > 0 and now - self.first_tool >= self.tool_budget_s):
+            self.over = True
+            self.q.put_nowait(_OVER)
+
     def finish(self) -> None:
         if self.held:
             self._release()
@@ -293,6 +338,10 @@ class _Session:
         self._req = 0
         self._interrupting = False
         self.narrate_after_s = 6.0
+        self.tool_budget = 0
+        self.tool_budget_s = 0.0
+        self.nudge = NUDGE_ANSWER
+        self.nudges = 0                       # replies stopped for going over the tool budget
         self.ttft_ms: list[float] = []        # first text delta after the turn was written
 
     async def start(self, warm: bool) -> None:
@@ -348,7 +397,7 @@ class _Session:
         return self.proc is not None and self.proc.returncode is None and self._reader is not None \
             and not self._reader.done()
 
-    async def submit(self, text: str) -> _Turn:
+    async def submit(self, text: str, budget: bool = True) -> _Turn:
         """Send one user turn; returns its _Turn (read it with stream())."""
         assert self.proc and self.proc.stdin
         await self._busy.wait()
@@ -357,7 +406,7 @@ class _Session:
         self._busy.clear()
         q: asyncio.Queue = asyncio.Queue()
         self._queue = q
-        turn = _Turn(q, self.narrate_after_s)
+        turn = _Turn(q, self.narrate_after_s, self.tool_budget if budget else 0, self.tool_budget_s)
         self._turn = turn
         msg = {"type": "user", "message": {"role": "user", "content": text}}
         self.proc.stdin.write((json.dumps(msg) + "\n").encode())
@@ -371,6 +420,13 @@ class _Session:
         try:
             while True:
                 t = await turn.q.get()
+                if t is _OVER:
+                    # too long on its own tools: stop this reply and tell the same process to hand
+                    # off (or wrap up); its answer streams on as part of this reply
+                    self.nudges += 1
+                    await self.cancel()
+                    turn = await self.submit(self.nudge, budget=False)
+                    continue
                 if t is None:
                     finished = True
                     if clean is not None:
@@ -476,6 +532,9 @@ class Brain:
     def _new_session(self) -> _Session:
         s = _Session(self._argv(), self.cfg.get("cwd") or os.getcwd(), self.cfg.get("clean", True))
         s.narrate_after_s = float(self.cfg.get("narrate_after_s", 6.0))
+        s.tool_budget = int(self.cfg.get("tool_budget") or 0)
+        s.tool_budget_s = float(self.cfg.get("tool_budget_s") or 0.0)
+        s.nudge = NUDGE_HANDOFF if HANDOFF_MARK in self.system_prompt() else NUDGE_ANSWER
         return s
 
     async def start(self) -> None:

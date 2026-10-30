@@ -150,9 +150,13 @@ def handoff_prompt(cmd: str) -> str:
 
 Handing work to Claude Code:
 - The user's own Claude Code session runs next to this call, with a stronger model and full tools. \
-Hand it real coding work: any change to files (edit, fix, refactor, write tests, commit), or anything \
-that takes more than a minute or two. You can still look things up yourself with your tools for quick \
-questions.
+Hand it every piece of real work, at once: any change to files (edit, fix, refactor, write tests, \
+commit), and any investigation: looking through logs, finding bugs or other issues, checking how \
+something behaves or whether it works, reviewing or explaining code across files, running tests or builds. \
+"See if there are issues in the logs" or "check whether it does X" is an investigation: hand it off.
+- Do it yourself only when one quick look answers it: one file read, one search or one short command, \
+two tool calls at most. Never say "let me check" and then dig on your own: the user hears only silence \
+while your tools run.
 - To hand off, first say one short sentence such as "Okay, handing that to Claude Code.", then run this \
 Bash command with the whole task in one quoted argument: {cmd} "the task"
 - Write the task for a developer who did not hear the call: what to do, where, and what done looks like. \

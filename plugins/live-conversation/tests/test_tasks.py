@@ -87,6 +87,14 @@ class TestBrainPrompt(unittest.TestCase):
         self.assertIn('live-task --run-dir /r "the task"', sp)
         self.assertNotIn("Handing work", Brain({"cwd": "/p"}).system_prompt())
 
+    def test_investigations_are_handed_off(self):
+        # bar 20261030-110521 turn 5: "see if there might be any other issues ... from the logs" was
+        # dug into by the voice brain itself; the prompt must name that as work to hand off
+        p = tasks.handoff_prompt("x")
+        self.assertIn("issues in the logs", p)
+        self.assertNotIn("You can still look things up yourself", p)
+        self.assertIn("two tool calls at most", p)
+
 
 def make():
     log = EventLog(Clock())

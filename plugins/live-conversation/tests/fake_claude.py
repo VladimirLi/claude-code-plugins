@@ -4,7 +4,8 @@
 Each process takes the next delay from FAKE_DELAYS (comma list of ms, via the counter
 file FAKE_COUNTER) as its time to first text. A user turn containing "tool" answers
 with a text block, a tool_use block, then a second text block. "long" streams slowly
-so a test can interrupt it.
+so a test can interrupt it. "logs" keeps calling tools (the bar's turn 5); a turn with
+"Note from the call" (the brain's nudge) and "handoff" hand off with a live-task Bash call.
 """
 import json, os, sys, time, threading
 
@@ -47,11 +48,44 @@ def text_block(i, parts, gap=0.0):
     ev({"type": "content_block_stop", "index": i})
     return True
 
+def tool_block(i, name, input_json):
+    ev({"type": "content_block_start", "index": i, "content_block": {"type": "tool_use", "name": name, "input": {}}})
+    ev({"type": "content_block_delta", "index": i, "delta": {"type": "input_json_delta", "partial_json": input_json}})
+    ev({"type": "content_block_stop", "index": i})
+
 def answer(text):
     stop.clear()
     time.sleep(DELAY)
     ev({"type": "message_start", "message": {}})
-    if "tool" in text:
+    if "Note from the call" in text:
+        # the brain was told to stop digging: hand off with live-task
+        text_block(0, ["Handing that ", "to Claude Code."])
+        tool_block(1, "Bash", '{"command": "python bin/live-task --run-dir /r \\"check the logs\\""}')
+        ev({"type": "message_delta", "delta": {"stop_reason": "tool_use"}})
+        ev({"type": "message_stop"})
+        ev({"type": "message_start", "message": {}})
+        text_block(0, ["Task one."])
+        ev({"type": "message_delta", "delta": {"stop_reason": "end_turn"}})
+        ev({"type": "message_stop"})
+    elif "logs" in text:
+        # the bar's turn: "see if there are issues from the logs"; digs with its own tools
+        text_block(0, ["Let me check ", "the logs."])
+        for i in range(8):
+            if stop.is_set():
+                break
+            tool_block(i + 1, "Grep", '{"pattern": "listening"}')
+            ev({"type": "message_delta", "delta": {"stop_reason": "tool_use"}})
+            ev({"type": "message_stop"})
+            time.sleep(0.3)
+            ev({"type": "message_start", "message": {}})
+        else:
+            text_block(0, ["Found ", "nothing."])
+    elif "handoff" in text:
+        text_block(0, ["Handing that ", "to Claude Code."])
+        tool_block(1, "Bash", '{"command": "python bin/live-task --run-dir /r \\"the task\\""}')
+        time.sleep(0.3)
+        text_block(0, ["Task one."])
+    elif "tool" in text:
         text_block(0, ["Let me ", "check."])
         ev({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "name": "Read"}})
         ev({"type": "content_block_stop", "index": 1})
