@@ -32,6 +32,7 @@ DEFAULTS = {
     "tail_ms": 1000.0,           # question tail: the piece last played within this before the start
     "heard_frac": 0.6,           # rule 7: an announcement is heard at this share of content audio
     "max_nowords_pauses": 2,     # rule 2: then the detector only ducks
+    "max_silent_tries": 3,       # rule 7: an item whose carrying replies played nothing this often is dropped
 }
 
 # Hums and breaths a transcript renders as a word (the orchestrator's _HUMS, after fold_hums).
@@ -343,9 +344,10 @@ class Announcement:
     id: str
     prompt: str
     label: str
-    state: str = "queued"        # queued | carried | heard
+    state: str = "queued"        # queued | carried | heard | dropped
     rid: Optional[str] = None
-    tries: int = 0
+    tries: int = 0               # failed deliveries (a join restart is none)
+    silent_tries: int = 0        # failed deliveries whose reply played no content
 
 
 @dataclass
@@ -959,7 +961,12 @@ class Floor:
                 self._floor("announce_heard", f"played {frac:.2f}", id=a.id, label=a.label)
             else:
                 a.state, a.tries = "queued", a.tries + 1
-                self._floor("announce_requeued", f"played {frac:.2f}", id=a.id, label=a.label)
+                a.silent_tries += r.first_heard_ms is None
+                if a.silent_tries >= self.cfg["max_silent_tries"]:
+                    a.state = "dropped"
+                    self._emit("x_announce_dropped", a.label, id=a.id, prompt=a.prompt, tries=a.tries)
+                else:
+                    self._floor("announce_requeued", f"played {frac:.2f}", id=a.id, label=a.label)
 
     def _floor_free(self) -> bool:
         return self.reply is None and all(s.status == "final" for s in self.segs.values())

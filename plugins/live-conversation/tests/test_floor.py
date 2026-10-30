@@ -711,6 +711,16 @@ class TestReviewFindings(FloorCase):
         sim.run()
         self.assertEqual([t for t, e in sim.events if isinstance(e, F.Played) and e.piece == "k1" and t > 2900], [])
 
+    def test_announcement_that_never_plays_is_dropped_after_three_tries(self):
+        sim = Sim(plans={"Task": Plan(error_ms=100), "": Plan()})
+        sim.at(0, F.TaskResult("t1", "Task 1 finished."))
+        ask(sim, start=8000)
+        sim.run()
+        starts = sim.starts()
+        self.assertEqual([a.kind for a in starts], ["announce"] * 3 + ["answer"])
+        self.assertEqual(starts[-1].carries, [])
+        self.assertEqual([e.fields["prompt"] for _, e in sim.emits("x_announce_dropped")], ["Task 1 finished."])
+
     def test_played_while_paused_is_ignored(self):
         f = F.Floor()
         f.on(F.SpeechStart(1, "u1", t_ms=0))

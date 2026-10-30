@@ -283,6 +283,9 @@ The word boundary is estimated from the piece's length, because the TTS gives no
    - A heard item is never carried again.
    - *Note (step 3): a join restart is not an end for this: the new reply carries the same items
      with the same `tries`, so an item never heard gets no retry note.*
+   - *Note (step 3b): after 3 failed tries whose reply played no content, the item is `dropped`,
+     logged as `x_announce_dropped` with its prompt, and never carried again. I6 then reads "heard
+     exactly once, or dropped".*
 8. **Keepalive.** While the brain runs, the gate is open, and nothing has played for
    `keepalive_after_ms` (4.5 s), the controller sends `keepalive`, then again every
    `keepalive_every_ms` (9 s). The 4.5 s timer restarts on every `play`. No keepalive is sent while

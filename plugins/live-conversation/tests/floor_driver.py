@@ -518,10 +518,19 @@ class Checker:
         # I6 Announcements once.
         items = {c for r in self.replies.values() for c in r.carries}
         items |= {e.id for _, e in sim.events if isinstance(e, F.TaskResult)}
+        dropped = {e.fields["id"] for _, e in self.emits if e.name == "x_announce_dropped"}
         for item in items:
             n = sum(1 for r in self.replies.values() if item in r.carries and self._heard(r))
-            if n != 1:
+            silent = sum(1 for r in self.replies.values() if item in r.carries and r.first_content is None)
+            if item in dropped:
+                # Rule 7: dropped only after 3 carrying replies that played nothing, and never heard.
+                if n or silent < self.cfg["max_silent_tries"]:
+                    self.fail("I6", f"announcement {item} dropped after {silent} silent tries, heard {n}")
+            elif n != 1:
                 self.fail("I6", f"announcement {item} heard {n} times")
+            if any(item in r.carries and r.start > t for r in self.replies.values()
+                   for t, e in self.emits if e.name == "x_announce_dropped" and e.fields["id"] == item):
+                self.fail("I6", f"announcement {item} carried after it was dropped")
         # I7 Metrics.
         ted = [(t, e) for t, e in self.emits if e.name == "turn_end_detected"]
         fra = [(t, e) for t, e in self.emits if e.name == "first_reply_audio"]
