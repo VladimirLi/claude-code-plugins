@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -148,6 +149,16 @@ class _Prediction:
 
 
 class Orchestrator:
+    def __new__(cls, audio=None, log=None, c=None, cfg: Optional[dict] = None):
+        # FLOOR-SPEC.md step 4: `orchestrator.floor: true` runs the floor controller's adapter
+        # instead of this class; every caller keeps constructing Orchestrator. LIVE_FLOOR=1 turns
+        # it on where the config does not say.
+        ocfg = (cfg or {}).get("orchestrator") or {}
+        if cls is Orchestrator and ocfg.get("floor", os.environ.get("LIVE_FLOOR") == "1"):
+            from .floor_adapter import FloorAdapter
+            return FloorAdapter(audio, log, c, cfg)
+        return super().__new__(cls)
+
     def __init__(self, audio, log: EventLog, c: Components, cfg: Optional[dict] = None) -> None:
         self.audio = audio
         self.log = log

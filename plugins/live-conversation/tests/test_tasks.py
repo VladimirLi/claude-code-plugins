@@ -96,6 +96,21 @@ class TestBrainPrompt(unittest.TestCase):
         self.assertIn("two tool calls at most", p)
 
 
+
+_FLOOR_ENV = None
+
+
+def setUpModule():
+    # These test the old orchestrator's announce() internals, so they run on the old path whatever LIVE_FLOOR
+    # says; the flag-on counterparts are in test_floor_adapter.py. (Step 6 deletes both.)
+    global _FLOOR_ENV
+    _FLOOR_ENV = os.environ.pop("LIVE_FLOOR", None)
+
+
+def tearDownModule():
+    if _FLOOR_ENV is not None:
+        os.environ["LIVE_FLOOR"] = _FLOOR_ENV
+
 def make():
     log = EventLog(Clock())
     audio = FakeAudio(log)

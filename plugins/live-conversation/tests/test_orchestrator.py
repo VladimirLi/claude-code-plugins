@@ -17,6 +17,21 @@ from live.turntaking import TurnTaking  # noqa: E402
 TONE = (np.sin(np.arange(SR // 10) / 5) * 8000).astype(np.int16)
 
 
+_FLOOR_ENV = None
+
+
+def setUpModule():
+    # These test the old orchestrator's internals, so they run on the old path whatever LIVE_FLOOR
+    # says; the flag-on counterparts are in test_floor_adapter.py. (Step 6 deletes both.)
+    global _FLOOR_ENV
+    _FLOOR_ENV = os.environ.pop("LIVE_FLOOR", None)
+
+
+def tearDownModule():
+    if _FLOOR_ENV is not None:
+        os.environ["LIVE_FLOOR"] = _FLOOR_ENV
+
+
 class FakeAudio:
     def __init__(self, log):
         self.clock = log.clock

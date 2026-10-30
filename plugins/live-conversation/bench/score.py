@@ -21,7 +21,8 @@ DEAD_AIR_MS = 1000
 REQUIRED = ["assistant.wav", "mic.wav", "timeline.wav", "events.jsonl", "transcript.json"]
 EVENTS = {"session_start", "user_speech_start", "user_speech_end", "turn_end_detected",
           "final_transcript", "first_reply_text", "first_reply_audio", "reply_audio_end",
-          "barge_in_detected", "playback_stopped"}
+          "barge_in_detected", "playback_stopped",
+          "playback_paused", "playback_resumed"}       # the floor controller (FLOOR-SPEC.md)
 
 
 def read_wav(path):
@@ -78,6 +79,11 @@ def score_scenario(d, sc):
     if not (len(a) == len(mic) == len(tl)):
         problems.append(f"length mismatch assistant={len(a)} mic={len(mic)} timeline={len(tl)}")
     ev = [json.loads(l) for l in open(os.path.join(d, "events.jsonl")) if l.strip()]
+    # turn_end_detected is written when its reply's first content plays, with the t_ms of the turn
+    # end, so the log is not in time order (FLOOR-SPEC.md "Labels and metrics")
+    ev.sort(key=lambda e: e.get("t_ms") or 0.0)
+    # every endpointer turn end, joined later or not: the floor controller logs x_turn_end
+    cuts = [e["t_ms"] for e in ev if e.get("event") == "x_turn_end"]
     for e in ev:
         if e.get("event") not in EVENTS and not str(e.get("event", "")).startswith("x_"):
             problems.append(f"unknown event {e.get('event')} (custom events must start with x_)")
@@ -117,7 +123,7 @@ def score_scenario(d, sc):
             ted = [e["t_ms"] for e in evs("turn_end_detected", n)]
             r["endpoint_delay_ms"] = (min(x for x in ted if x >= start_ms) - end_ms) if any(x >= start_ms for x in ted) else None
             # A turn-end decision inside the user's own speech/pauses is a false cut-off.
-            r["false_cutoffs"] = sum(1 for x in ted if start_ms <= x < end_ms)
+            r["false_cutoffs"] = sum(1 for x in (cuts or ted) if start_ms <= x < end_ms)
             ft = evs("final_transcript", n)
             r["stt_delay_ms"] = (ft[-1]["t_ms"] - end_ms) if ft else None
         # Assistant audio while the user is speaking (not counting a reply being interrupted).
