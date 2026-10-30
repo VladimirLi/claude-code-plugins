@@ -80,6 +80,13 @@ class Components:
     turntaking: TurnTaking
 
 
+# announce(): sent before the prompt when an earlier try was cut before the user heard any of it
+ANNOUNCE_RETRY_NOTE = ('[Not heard yet: the message below reached you before, but the user started talking '
+                       'before any of your answer to it was spoken, so they have not heard it. It is the same '
+                       'single message, not a new or second one. Tell them now as if for the first time; '
+                       'don\'t say "again", "still", "same" or "came back".]')
+
+
 @dataclass
 class Reply:
     turn: Optional[int]
@@ -682,7 +689,11 @@ class Orchestrator:
         The brain gets `prompt` as a turn of its own once the conversation is free: the user
         is not talking, no reply is in flight, nothing plays, for announce_quiet_ms. The user
         can talk over it like over any reply. If the user starts talking before any of its
-        audio played, it is dropped and tried again when they are done."""
+        content played, it is dropped and tried again when they are done.
+
+        A dropped try stays in the brain's history (the claude process keeps the message), so a
+        retry sent as the same text reads like a second, repeated result ("came back again").
+        A retry therefore goes with ANNOUNCE_RETRY_NOTE: the user has not heard it, say it once."""
         return self._spawn(self._announce(prompt))
 
     def _free(self) -> bool:
@@ -690,6 +701,7 @@ class Orchestrator:
 
     async def _announce(self, prompt: str) -> None:
         quiet_s = float(self.ocfg["announce_quiet_ms"]) / 1000.0
+        attempt = 0
         while True:
             free_since = None
             while True:
@@ -701,16 +713,19 @@ class Orchestrator:
                 elif now - free_since >= quiet_s:
                     break
                 await asyncio.sleep(0.05)
-            r = Reply(None, prompt, decided_ms=self.clock.ms, announce=True)
+            text = prompt if attempt == 0 else ANNOUNCE_RETRY_NOTE + " " + prompt
+            attempt += 1
+            r = Reply(None, text, decided_ms=self.clock.ms, announce=True)
             self.reply = r
             self.replies.append(r)
             interrupted, self.pending_interrupt = self.pending_interrupt, None
             r.after_interrupt = interrupted is not None
-            self.log.emit("x_announce", None, text=prompt[:200])
+            self.log.emit("x_announce", None, text=prompt[:200], attempt=attempt)
             task = self._spawn(self._reply(r, interrupted, None))
             self.reply_task = task
             await asyncio.wait({task})
-            if r.audio_started or not task.cancelled():
+            # retry only if none of its content was heard (a keepalive line is not the content)
+            if r.content_started or not task.cancelled():
                 return
 
     # -- output --------------------------------------------------------------
