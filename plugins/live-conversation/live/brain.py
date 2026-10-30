@@ -452,6 +452,7 @@ class Brain:
         self.wins: list[int] = []                      # index of the winning session per turn
         self._closing: list[asyncio.Task] = []
         self._missed: dict[int, list[tuple[str, str]]] = {}   # id(session) -> (user said, user heard)
+        self.last_timing: dict = {}                    # see respond()
 
     def system_prompt(self) -> str:
         p = (self.cfg.get("system_prompt") or VOICE_PROMPT) + (self.cfg.get("prompt_extra") or "")
@@ -531,6 +532,7 @@ class Brain:
 
     async def respond(self, text: str, interrupted: Optional[Interrupted] = None) -> AsyncIterator[str]:
         assert self.session is not None, "start() first"
+        t0 = time.monotonic()
         live = [s for s in self.sessions if s.alive] or [self.session]
         idle = [s for s in live if s._busy.is_set()]
         if not idle:
@@ -541,6 +543,7 @@ class Brain:
                 x.cancel()
             idle = [waits[x] for x in done]
         live = idle      # a process still busy sits this turn out; it gets a context note later
+        t_idle = time.monotonic()
         turns = list(await asyncio.gather(*(s.submit(self._message(s, text, interrupted)) for s in live)))
         w = 0
         if len(live) > 1:
@@ -558,10 +561,17 @@ class Brain:
         winner = live[w]
         self.session = winner
         self.wins.append(self.sessions.index(winner) if winner in self.sessions else 0)
+        ms = lambda t: round((t - t0) * 1000) if t is not None else None   # noqa: E731
+        # timing of this turn, for the x_brain event: wait for an idle process, each racer's
+        # reply start, the first text (set when the first delta is yielded)
+        self.last_timing = {"idle_ms": ms(t_idle), "racers": len(live), "winner": self.wins[-1],
+                            "started_ms": [ms(t.started_at) for t in turns], "first_text_ms": None}
         out: list[str] = []
         done = False
         try:
             async for d in winner.stream(turns[w]):
+                if not out:
+                    self.last_timing["first_text_ms"] = ms(time.monotonic())
                 out.append(d)
                 yield d
             done = True
