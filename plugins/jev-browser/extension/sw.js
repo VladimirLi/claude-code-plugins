@@ -10,6 +10,8 @@ let ws = null, connecting = false, backoff = 500;
 const ours = new Set();                 // tab ids the daemon created or adopted as pop-ups
 const sessions = new Map();             // sessionId -> tabId
 const targetOfTab = new Map();          // tabId -> CDP target id
+const contexts = new Map();             // fresh-session context id -> its tab ids (incognito)
+let contextSeq = 0;
 const sid = (tabId) => `ext-${tabId}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -63,12 +65,20 @@ async function targetId(tabId) {
   }
   throw new Error(`no debugger target for tab ${tabId}`);
 }
+// no incognito window left open (so the next one starts on an empty incognito profile)
+async function incognitoGone() {
+  for (let i = 0; i < 100; i++) {
+    if (!(await chrome.windows.getAll()).some((w) => w.incognito)) return true;
+    await sleep(20);
+  }
+  return false;
+}
 function tabOf(target) {
   for (const [tab, t] of targetOfTab) if (t === target) return tab;
   throw new Error(`unknown target ${target}`);
 }
 
-async function handle(m) {
+export async function handle(m) {
   const p = m.params || {};
   if (m.sessionId) {
     const tabId = sessions.get(m.sessionId);
@@ -78,16 +88,35 @@ async function handle(m) {
   switch (m.method) {
     case "Browser.getVersion": return { product: (navigator.userAgent.match(/Chrome\/[\d.]+/) || [""])[0], userAgent: navigator.userAgent, protocolVersion: "1.3", transport: "extension" };
     case "Target.setDiscoverTargets": return {};
-    // a fresh session: an incognito window when the user allowed this extension there;
-    // otherwise null, and the session opens a normal window (the daemon logs it)
-    case "Target.createBrowserContext":
-      return { browserContextId: (await chrome.extension.isAllowedIncognitoAccess()) ? "incognito" : null };
-    case "Target.disposeBrowserContext": return {};
+    // a fresh session: its own incognito window. Chrome starts an empty incognito profile when
+    // no incognito window is open and drops it when the last one closes, so sessions run one
+    // after another never see each other's cookies or storage. Without incognito access there is
+    // no empty context to give: refuse, never hand out the shared profile in its place.
+    case "Target.createBrowserContext": {
+      if (!(await chrome.extension.isAllowedIncognitoAccess()))
+        throw new Error("--fresh needs the jev-browser extension allowed in Incognito (chrome://extensions, jev-browser, Details, \"Allow in Incognito\"); without it a session can only use your normal profile");
+      const id = `incognito-${++contextSeq}`;
+      const open = [...contexts.keys()];
+      contexts.set(id, new Set());
+      // incognito windows all share one profile while any is open: say so when another is live
+      return { browserContextId: id, ...(open.length ? { warning: `shares the incognito profile with ${open.length} other open fresh session(s)` } : {}) };
+    }
+    case "Target.disposeBrowserContext": {
+      const tabs = contexts.get(p.browserContextId);
+      contexts.delete(p.browserContextId);
+      if (tabs) await Promise.all([...tabs].map((t) => chrome.tabs.remove(t).catch(() => {})));
+      return {};
+    }
     case "Target.createTarget": {
-      const w = await chrome.windows.create({ url: "about:blank", focused: false, incognito: p.browserContextId === "incognito", width: 1280, height: 900 });
+      const ctx = p.browserContextId ? contexts.get(p.browserContextId) : null;
+      if (p.browserContextId && !ctx) throw new Error(`unknown browser context ${p.browserContextId}`);
+      // a new fresh session waits until the incognito profile of the last one is gone
+      const alone = ctx && contexts.size === 1 ? await incognitoGone() : true;
+      const w = await chrome.windows.create({ url: "about:blank", focused: false, incognito: !!ctx, width: 1280, height: 900 });
       const tab = w.tabs?.[0] ?? (await chrome.tabs.query({ windowId: w.id }))[0];
-      ours.add(tab.id);
-      return { targetId: await targetId(tab.id) };
+      ours.add(tab.id); ctx?.add(tab.id);
+      if (ctx && !w.incognito) { await chrome.windows.remove(w.id).catch(() => {}); throw new Error("Chrome did not open an incognito window for the fresh session"); }
+      return { targetId: await targetId(tab.id), ...(alone ? {} : { warning: "an incognito window that is not this session's is open: the fresh session shares its cookies and storage" }) };
     }
     case "Target.attachToTarget": {
       const tabId = tabOf(p.targetId);
@@ -123,6 +152,7 @@ chrome.debugger.onDetach.addListener((src, reason) => {
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (d) => {
   if (!ours.has(d.sourceTabId)) return;
   ours.add(d.tabId);
+  for (const tabs of contexts.values()) if (tabs.has(d.sourceTabId)) tabs.add(d.tabId);
   try {
     const [targetIdNew, opener] = await Promise.all([targetId(d.tabId), targetId(d.sourceTabId)]);
     post({ method: "Target.targetCreated", params: { targetInfo: { targetId: targetIdNew, type: "page", openerId: opener, url: d.url || "" } } });
@@ -131,6 +161,7 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (d) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (!ours.has(tabId)) return;
   ours.delete(tabId);
+  for (const tabs of contexts.values()) tabs.delete(tabId);
   const t = targetOfTab.get(tabId); targetOfTab.delete(tabId);
   if (t) post({ method: "Target.targetDestroyed", params: { targetId: t } });
 });

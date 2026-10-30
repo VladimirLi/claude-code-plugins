@@ -105,3 +105,57 @@ test("the manifest key gives the extension id the daemon checks", () => {
   assert.equal(EXT_ORIGIN, `chrome-extension://${EXT_ID}`);
   assert.ok(CDP);
 });
+
+// sw.js against a stub chrome.*: what a --fresh session gets from the extension
+async function loadSw({ incognito = true } = {}) {
+  const windows = new Map(); let nextId = 1;
+  const listener = () => ({ addListener() {} });
+  globalThis.chrome = {
+    extension: { isAllowedIncognitoAccess: async () => incognito },
+    windows: {
+      create: async (o) => { const id = nextId++, tab = { id: 100 + id, windowId: id }; windows.set(id, { id, incognito: !!o.incognito, tabs: [tab] }); return windows.get(id); },
+      getAll: async () => [...windows.values()],
+      remove: async (id) => { windows.delete(id); },
+    },
+    tabs: {
+      query: async ({ windowId }) => windows.get(windowId)?.tabs ?? [],
+      remove: async (tabId) => { for (const [id, w] of windows) if (w.tabs.some((t) => t.id === tabId)) windows.delete(id); },
+      onRemoved: listener(),
+    },
+    debugger: { getTargets: async () => [...windows.values()].flatMap((w) => w.tabs.map((t) => ({ id: `T${t.id}`, tabId: t.id }))), onEvent: listener(), onDetach: listener(), attach: async () => {}, detach: async () => {} },
+    webNavigation: { onCreatedNavigationTarget: listener() },
+    storage: { local: { get: async () => ({}), set: async () => {} } },
+    runtime: { getURL: (p) => `chrome-extension://x/${p}`, onMessage: listener(), onStartup: listener(), onInstalled: listener(), getManifest: () => ({ version: "0" }) },
+    alarms: { create() {}, onAlarm: listener() },
+  };
+  globalThis.fetch = async () => ({ ok: false });   // no pair.json: the worker stays unconnected
+  const sw = await import(`../extension/sw.js?${Math.random()}`);
+  return { sw, windows, incognitoWindows: () => [...windows.values()].filter((w) => w.incognito).length };
+}
+
+test("--fresh in the extension: its own incognito window, closed with the session; refused without incognito access", async () => {
+  const { sw, windows, incognitoWindows } = await loadSw();
+  const send = (method, params = {}) => sw.handle({ id: 1, method, params });
+  const a = await send("Target.createBrowserContext");
+  assert.match(a.browserContextId, /^incognito-/);
+  assert.equal(a.warning, undefined);
+  const ta = await send("Target.createTarget", { url: "about:blank", browserContextId: a.browserContextId });
+  assert.equal(ta.warning, undefined);
+  assert.equal(incognitoWindows(), 1);
+  // a session that is not fresh: a normal window
+  await send("Target.createTarget", { url: "about:blank" });
+  assert.equal([...windows.values()].filter((w) => !w.incognito).length, 1);
+  // a second fresh session while the first is open shares the incognito profile: it is said
+  const b = await send("Target.createBrowserContext");
+  assert.match(b.warning, /shares the incognito profile/);
+  await send("Target.disposeBrowserContext", { browserContextId: b.browserContextId });
+  // dispose closes the session's incognito window; the next fresh session starts alone
+  await send("Target.disposeBrowserContext", { browserContextId: a.browserContextId });
+  assert.equal(incognitoWindows(), 0);
+  const c = await send("Target.createBrowserContext");
+  assert.equal(c.warning, undefined);
+  await assert.rejects(send("Target.createTarget", { browserContextId: "incognito-999" }), /unknown browser context/);
+
+  const { sw: noInc } = await loadSw({ incognito: false });
+  await assert.rejects(noInc.handle({ id: 1, method: "Target.createBrowserContext", params: {} }), /Allow in Incognito/);
+});

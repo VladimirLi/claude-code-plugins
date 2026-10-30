@@ -135,6 +135,13 @@ export const pairingCode = (p = pairing()) => `jevb:${p.port}:${p.token}`;
 export class ExtCDP extends CDP {
   constructor(ws) { super(ws, "extension"); }
   async send(method, params = {}, sessionId, timeout) {
+    if (method === "Target.createBrowserContext" || (method === "Target.createTarget" && params.browserContextId)) {
+      // a fresh session: the extension gives it its own incognito window, or refuses
+      const r = await super.send(method, params, sessionId, timeout).catch((e) => { extLog(`fresh session refused: ${e.message}`); throw e; });
+      if (r.browserContextId) extLog(`fresh session context ${r.browserContextId} (incognito window, empty cookies and storage)`);
+      if (r.warning) extLog(`warning: fresh session ${params.browserContextId ?? r.browserContextId ?? ""} ${r.warning}`);
+      return r;
+    }
     if (method !== "DOM.setFileInputFiles" || !params.objectId) return super.send(method, params, sessionId, timeout);
     try { return await super.send(method, params, sessionId, timeout); }
     catch (e) {
@@ -202,7 +209,7 @@ export async function connectExtension() {
 async function launchTestChrome(h) {
   if (!existsSync(CHROME)) throw new Error(`Chrome not found at ${CHROME} (set JEVB_CHROME)`);
   const profile = join(HOME, "ext-test-profile"), dir = join(HOME, "ext-test", "extension");
-  // a clean profile each launch (as the bench's --fresh context), and a copy of the extension
+  // a clean profile each launch (each --fresh session also gets its own incognito profile), and a copy of the extension
   // that carries this launch's pairing
   rmSync(profile, { recursive: true, force: true }); mkdirSync(profile, { recursive: true, mode: 0o700 });
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -232,12 +239,13 @@ async function launchTestChrome(h) {
     proc.once("exit", (code) => rej(new Error(`Chrome exited at start (code ${code})`)));
     setTimeout(() => rej(new Error("Chrome did not answer on the pipe within 30 s")), 30_000);
   });
-  toChrome.write(JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: dir } }) + "\0");
+  // allowed in incognito, so that each --fresh session gets an empty incognito profile
+  toChrome.write(JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: dir, enableInIncognito: true } }) + "\0");
   let r;
   try { r = await reply; } catch (e) { proc.kill(); throw e; }
   // keep the pipe open (closing it ends Chrome) but never send on it again
   fromChrome.removeAllListeners("data"); fromChrome.on("data", () => {});
   if (r.id !== EXT_ID) extLog(`loaded extension id ${r.id}, expected ${EXT_ID}`);
-  extLog(`test Chrome ${proc.pid}: pipe sent 1 command (Extensions.loadUnpacked ${r.id}); all others go over the extension`);
+  extLog(`test Chrome ${proc.pid}: pipe sent 1 command (Extensions.loadUnpacked ${r.id}, incognito allowed); all others go over the extension`);
   return proc;
 }
