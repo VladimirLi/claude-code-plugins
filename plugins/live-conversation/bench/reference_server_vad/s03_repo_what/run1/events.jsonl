@@ -1,0 +1,11 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1381.18, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 1012}
+{"t_ms": 3373.08, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4248.08, "event": "turn_end_detected", "turn": 1, "source": "server_vad", "audio_end_ms": 3936}
+{"t_ms": 4248.23, "event": "x_committed", "turn": 1}
+{"t_ms": 4248.29, "event": "x_response_created", "turn": 1}
+{"t_ms": 5057.47, "event": "final_transcript", "turn": 1, "text": "So what does this repo actually do?"}
+{"t_ms": 6226.19, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 6508.17, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 43278.21, "event": "reply_audio_end", "turn": 1}

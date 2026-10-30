@@ -1,0 +1,21 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1483.88, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 5223.5, "event": "user_speech_end", "turn": 1}
+{"t_ms": 6344.67, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 5696}
+{"t_ms": 6344.69, "event": "x_committed", "turn": 1}
+{"t_ms": 6345.56, "event": "x_response_created", "turn": 1}
+{"t_ms": 6732.48, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 6969.54, "event": "final_transcript", "turn": 1, "text": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?"}
+{"t_ms": 6969.54, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 35569.54, "event": "reply_audio_end", "turn": 1}
+{"t_ms": 39040.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 39373.03, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 38740}
+{"t_ms": 39459.96, "event": "user_speech_end", "turn": 2}
+{"t_ms": 41148.37, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 39936}
+{"t_ms": 41155.1, "event": "x_committed", "turn": 2}
+{"t_ms": 41169.25, "event": "x_response_created", "turn": 2}
+{"t_ms": 41639.41, "event": "final_transcript", "turn": 2, "text": "Yeah."}
+{"t_ms": 41639.45, "event": "first_reply_text", "turn": 2, "text": "Tot"}
+{"t_ms": 41776.0, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 62109.46, "event": "reply_audio_end", "turn": 2}

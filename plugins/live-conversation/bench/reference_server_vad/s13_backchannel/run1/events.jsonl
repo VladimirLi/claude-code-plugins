@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1279.7, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3176.58, "event": "user_speech_end", "turn": 1}
+{"t_ms": 3797.79, "event": "turn_end_detected", "turn": 1, "source": "server_vad", "audio_end_ms": 3744}
+{"t_ms": 3797.81, "event": "x_committed", "turn": 1}
+{"t_ms": 3798.94, "event": "x_response_created", "turn": 1}
+{"t_ms": 4457.71, "event": "final_transcript", "turn": 1, "text": "Walk me through how a hash map works."}
+{"t_ms": 5192.87, "event": "first_reply_text", "turn": 1, "text": "Alright"}
+{"t_ms": 5365.79, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 8730.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 9198.75, "event": "user_speech_end", "turn": 2}
+{"t_ms": 10112.62, "event": "playback_stopped", "turn": 1, "spoken_text": "Alright, let\u2019s break it down in a fun and simple way! Imagine a hash map is like"}
+{"t_ms": 10112.65, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 8436}
+{"t_ms": 10112.65, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 10181.67, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 10320.66, "event": "turn_end_detected", "turn": 2, "source": "server_vad", "audio_end_ms": 9760}
+{"t_ms": 10320.68, "event": "x_committed", "turn": 2}
+{"t_ms": 10320.71, "event": "x_response_created", "turn": 2}
+{"t_ms": 11281.24, "event": "first_reply_text", "turn": 2, "text": "\u2026and"}
+{"t_ms": 11377.58, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 11604.61, "event": "final_transcript", "turn": 2, "text": "Mm-mm."}
+{"t_ms": 46304.62, "event": "reply_audio_end", "turn": 2}

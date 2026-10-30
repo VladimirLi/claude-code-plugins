@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Run git reset dash dash soft HEAD tilde one. That undoes the commit but keeps your changes staged.",
+      "text_spoken": "Run git reset dash dash soft HEAD tilde one. That undoes the commit but keeps your changes staged.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

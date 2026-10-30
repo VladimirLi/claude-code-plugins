@@ -1,0 +1,21 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1298.53, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 948}
+{"t_ms": 2912.12, "event": "user_speech_end", "turn": 1}
+{"t_ms": 3491.96, "event": "turn_end_detected", "turn": 1, "source": "server_vad", "audio_end_ms": 3456}
+{"t_ms": 3491.98, "event": "x_committed", "turn": 1}
+{"t_ms": 3492.0, "event": "x_response_created", "turn": 1}
+{"t_ms": 4156.56, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 4308.25, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 4532.14, "event": "final_transcript", "turn": 1, "text": "How do I undo my last commit?"}
+{"t_ms": 47482.17, "event": "reply_audio_end", "turn": 1}
+{"t_ms": 48090.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 48157.57, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 47796}
+{"t_ms": 50680.5, "event": "user_speech_end", "turn": 2}
+{"t_ms": 51326.53, "event": "turn_end_detected", "turn": 2, "source": "server_vad", "audio_end_ms": 51264}
+{"t_ms": 51326.55, "event": "x_committed", "turn": 2}
+{"t_ms": 51326.58, "event": "x_response_created", "turn": 2}
+{"t_ms": 51858.84, "event": "final_transcript", "turn": 2, "text": "No, I meant undo it but keep the changes."}
+{"t_ms": 52145.8, "event": "first_reply_text", "turn": 2, "text": "Got"}
+{"t_ms": 52324.42, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 74593.62, "event": "reply_audio_end", "turn": 2}

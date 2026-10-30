@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Can you run the tests and tell me if anything's broken?",
+      "asr_text": "Can you run the tests and tell me if anything's broken?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Absolutely, I\u2019ve got you covered! Let me run those tests for you and we\u2019ll see if anything\u2019s out of place. Just give me a moment while I check things out.",
+      "text_spoken": "Absolutely, I\u2019ve got you covered! Let me run those tests for you and we\u2019ll see if anything\u2019s out of place. Just give me a moment while I check things out.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

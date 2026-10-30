@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Honestly, I'd hold off on the rewrite. Rewrites feel clean, but you lose all the small fixes you've made along the way. I'd pick the part that breaks most often, put a few tests around it, and clean that up first. If it still feels hopeless after a week, then rewrite, but you'll know much more about what you actually need.",
+      "text_spoken": "Honestly, I'd hold off on the rewrite. Rewrites feel clean, but you lose all the small fixes you've made along the way. I'd pick the part that breaks most often, put a few tests around it, and clean that up first. If it still feels hopeless after a week, then rewrite, but you'll know much more about what you actually need.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

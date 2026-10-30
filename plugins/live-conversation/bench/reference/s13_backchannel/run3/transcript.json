@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Walk me through how a hash map works.",
+      "asr_text": "Walk me through how a hashmap works."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Absolutely! Let\u2019s dive into the magic of how a hash map works.\n\nImagine a big set of labeled boxes, called buckets. Each bucket is like a container where values can be stored. Now, every time you want to store some data\u2014let\u2019s say a key-value pair\u2014the hash",
+      "text_spoken": "Absolutely! Let\u2019s dive into the magic of how a",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Mm-hmm.",
+      "asr_text": "Mhm."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "All right, let's dive in! Imagine a hash map as a magical treasure chest with lots of little individual compartments. Each compartment holds a key-value pair. When you put something in, a special function called a hash function takes the key and transforms it into an index\u2014a number that tells the hash map exactly which compartment to store the value in. \n\nWhen you want to retrieve the value later, you just give the hash map the key. It runs the same hash function, finds the right compartment, and pulls out the value. \n\nIt\u2019s super efficient, because no matter how big the hash map gets, finding your value usually just takes one quick look in the right compartment. Of course, sometimes two keys land in the same compartment\u2014that's called a collision\u2014but hash maps handle that by storing both values in that spot and sorting it out when you retrieve them. That\u2019s the basic idea\u2014a neat, organized, and super-fast way to store and retrieve data!",
+      "text_spoken": "All right, let's dive in! Imagine a hash map as a magical treasure chest with lots of little individual compartments. Each compartment holds a key-value pair. When you put something in, a special function called a hash function takes the key and transforms it into an index\u2014a number that tells the hash map exactly which compartment to store the value in. \n\nWhen you want to retrieve the value later, you just give the hash map the key. It runs the same hash function, finds the right compartment, and pulls out the value. \n\nIt\u2019s super efficient, because no matter how big the hash map gets, finding your value usually just takes one quick look in the right compartment. Of course, sometimes two keys land in the same compartment\u2014that's called a collision\u2014but hash maps handle that by storing both values in that spot and sorting it out when you retrieve them. That\u2019s the basic idea\u2014a neat, organized, and super-fast way to store and retrieve data!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

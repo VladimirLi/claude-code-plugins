@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1291.1, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3403.21, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4534.7, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 3872}
+{"t_ms": 4534.75, "event": "x_committed", "turn": 1}
+{"t_ms": 4534.78, "event": "x_response_created", "turn": 1}
+{"t_ms": 5256.18, "event": "final_transcript", "turn": 1, "text": "Can you explain how Git rebase works?"}
+{"t_ms": 5702.99, "event": "first_reply_text", "turn": 1, "text": "Of"}
+{"t_ms": 5871.08, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 10090.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 12808.17, "event": "user_speech_end", "turn": 2}
+{"t_ms": 16208.71, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 9812}
+{"t_ms": 16208.71, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 16208.71, "event": "playback_stopped", "turn": 1, "spoken_text": "Of course! Git rebase is a super handy tool that lets you move or combine a series of commits onto a new base commit. Imagine you have a feature branch that diverged from"}
+{"t_ms": 16327.33, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 18214.17, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 13280}
+{"t_ms": 18214.2, "event": "x_committed", "turn": 2}
+{"t_ms": 18222.06, "event": "x_response_created", "turn": 2}
+{"t_ms": 18907.27, "event": "final_transcript", "turn": 2, "text": "Wait, wait, how is that different from merge?"}
+{"t_ms": 19116.83, "event": "first_reply_text", "turn": 2, "text": "Ah"}
+{"t_ms": 19294.92, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 68317.54, "event": "reply_audio_end", "turn": 2}

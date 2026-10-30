@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1279.57, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3176.58, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4306.27, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 3648}
+{"t_ms": 4308.86, "event": "x_committed", "turn": 1}
+{"t_ms": 4308.88, "event": "x_response_created", "turn": 1}
+{"t_ms": 4665.84, "event": "first_reply_text", "turn": 1, "text": "Sure"}
+{"t_ms": 4815.17, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 5078.83, "event": "final_transcript", "turn": 1, "text": "Walk me through how a hash map works."}
+{"t_ms": 7560.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 7881.75, "event": "playback_stopped", "turn": 1, "spoken_text": "Sure thing! Let me break it down for you in a"}
+{"t_ms": 7881.76, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 7284}
+{"t_ms": 7881.76, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 7939.68, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 8028.75, "event": "user_speech_end", "turn": 2}
+{"t_ms": 9085.54, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 9040}
+{"t_ms": 9085.57, "event": "x_committed", "turn": 2}
+{"t_ms": 9087.51, "event": "x_response_created", "turn": 2}
+{"t_ms": 9510.81, "event": "final_transcript", "turn": 2, "text": "Mhm."}
+{"t_ms": 9722.79, "event": "first_reply_text", "turn": 2, "text": "Alright"}
+{"t_ms": 9872.92, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 75403.5, "event": "reply_audio_end", "turn": 2}

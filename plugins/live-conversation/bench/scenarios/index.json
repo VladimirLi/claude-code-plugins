@@ -1,0 +1,113 @@
+[
+  {
+    "id": "s01_quick_fact",
+    "kind": "quick_fact",
+    "turns": 1,
+    "speech_ms": [
+      1701
+    ]
+  },
+  {
+    "id": "s02_chitchat",
+    "kind": "chitchat",
+    "turns": 1,
+    "speech_ms": [
+      5014
+    ]
+  },
+  {
+    "id": "s03_repo_what",
+    "kind": "claude_code_request",
+    "turns": 1,
+    "speech_ms": [
+      2173
+    ]
+  },
+  {
+    "id": "s04_run_tests",
+    "kind": "claude_code_request",
+    "turns": 1,
+    "speech_ms": [
+      2711
+    ]
+  },
+  {
+    "id": "s05_um_pause",
+    "kind": "mid_utterance_pause",
+    "turns": 1,
+    "speech_ms": [
+      6760
+    ]
+  },
+  {
+    "id": "s06_long_ramble",
+    "kind": "long_turn",
+    "turns": 1,
+    "speech_ms": [
+      26827
+    ]
+  },
+  {
+    "id": "s07_followup_chain",
+    "kind": "multi_turn",
+    "turns": 3,
+    "speech_ms": [
+      2475,
+      2583,
+      1484
+    ]
+  },
+  {
+    "id": "s08_bargein_early",
+    "kind": "barge_in",
+    "turns": 2,
+    "speech_ms": [
+      2412,
+      2381
+    ]
+  },
+  {
+    "id": "s09_bargein_late",
+    "kind": "barge_in",
+    "turns": 2,
+    "speech_ms": [
+      2203,
+      2718
+    ]
+  },
+  {
+    "id": "s10_correction",
+    "kind": "correction",
+    "turns": 2,
+    "speech_ms": [
+      1712,
+      2590
+    ]
+  },
+  {
+    "id": "s11_silence_yeah",
+    "kind": "silence_then_short",
+    "turns": 2,
+    "speech_ms": [
+      4024,
+      420
+    ]
+  },
+  {
+    "id": "s12_incomplete_pause",
+    "kind": "mid_utterance_pause",
+    "turns": 1,
+    "speech_ms": [
+      5120
+    ]
+  },
+  {
+    "id": "s13_backchannel",
+    "kind": "backchannel",
+    "turns": 2,
+    "speech_ms": [
+      1977,
+      469
+    ]
+  }
+]

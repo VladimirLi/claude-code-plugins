@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "So what does this repo actually do?",
+      "asr_text": "So what does this repo actually do?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! Great question. Let\u2019s break it down. Imagine you\u2019ve got a repo that\u2019s like a toolbox. This particular repo, from what I can see, is designed to automate the deployment of a web app. It\u2019s got some scripts for setting up the infrastructure\u2014think cloud servers, databases, and all that jazz. Plus, it looks like it\u2019s got a CI/CD pipeline to test and deploy changes automatically. Pretty handy, huh? So in short, this repo helps developers get their app from code to a live, running service with minimal fuss.",
+      "text_spoken": "Hey there! Great question. Let\u2019s break it down. Imagine you\u2019ve got a repo that\u2019s like a toolbox. This particular repo, from what I can see, is designed to automate the deployment of a web app. It\u2019s got some scripts for setting up the infrastructure\u2014think cloud servers, databases, and all that jazz. Plus, it looks like it\u2019s got a CI/CD pipeline to test and deploy changes automatically. Pretty handy, huh? So in short, this repo helps developers get their app from code to a live, running service with minimal fuss.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

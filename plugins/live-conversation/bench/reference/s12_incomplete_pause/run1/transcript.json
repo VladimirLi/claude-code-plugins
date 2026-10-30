@@ -1,0 +1,26 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I was wondering if you could check what the readme says about installing.",
+      "asr_text": "I was wondering if... You could check what the README says about installing."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, I'm",
+      "text_spoken": "Hey, I'm",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! Let me help you out. Could you let me know where the README file is located, or which project you're working on? Then I can give you the exact steps from the instructions. Or if you'd like, I can summarize common installation steps based on the kind of project it is\u2014like a Python app, a Node.js project, or something else.",
+      "text_spoken": "Sure thing! Let me help you out. Could you let me know where the README file is located, or which project you're working on? Then I can give you the exact steps from the instructions. Or if you'd like, I can summarize common installation steps based on the kind of project it is\u2014like a Python app, a Node.js project, or something else.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

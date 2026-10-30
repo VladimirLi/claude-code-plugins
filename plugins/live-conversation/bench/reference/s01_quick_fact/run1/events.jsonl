@@ -1,0 +1,11 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1283.48, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 2901.21, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4057.62, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 3960}
+{"t_ms": 4057.68, "event": "x_committed", "turn": 1}
+{"t_ms": 4059.02, "event": "x_response_created", "turn": 1}
+{"t_ms": 4388.5, "event": "first_reply_text", "turn": 1, "text": "The"}
+{"t_ms": 4620.3, "event": "final_transcript", "turn": 1, "text": "What's the capital of Australia?"}
+{"t_ms": 4623.71, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 16073.71, "event": "reply_audio_end", "turn": 1}

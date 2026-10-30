@@ -1,0 +1,12 @@
+{
+  "name": "live-conversation",
+  "description": "Talk to Claude Code by voice in a live, interruptible conversation; /live starts it, and coding tasks go to your session",
+  "author": {
+    "name": "VladimirLi",
+    "url": "https://github.com/VladimirLi"
+  },
+  "homepage": "https://github.com/VladimirLi/claude-code-plugins/tree/main/plugins/live-conversation",
+  "repository": "https://github.com/VladimirLi/claude-code-plugins",
+  "license": "MIT",
+  "keywords": ["voice", "live", "conversation", "speech", "mod"]
+}

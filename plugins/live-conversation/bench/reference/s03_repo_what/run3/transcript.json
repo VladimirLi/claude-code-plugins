@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "So what does this repo actually do?",
+      "asr_text": "So what does this repo actually do?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Alright, let\u2019s break it down in a fun way. This repo is like a toolbox for building web applications. It\u2019s got all the essentials: a front-end framework, a back-end server, and some handy utilities to handle data, user authentication, and routing. It\u2019s basically a starting point for developers who want to hit the ground running when creating a modern web app. Think of it as a well-organized blueprint that helps you focus on building your unique features, without getting bogged down in setting up the basic architecture.",
+      "text_spoken": "Alright, let\u2019s break it down in a fun way. This repo is like a toolbox for building web applications. It\u2019s got all the essentials: a front-end framework, a back-end server, and some handy utilities to handle data, user authentication, and routing. It\u2019s basically a starting point for developers who want to hit the ground running when creating a modern web app. Think of it as a well-organized blueprint that helps you focus on building your unique features, without getting bogged down in setting up the basic architecture.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

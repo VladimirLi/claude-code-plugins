@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Hand a task from the voice call to the Claude Code session.
+
+    live-task --run-dir DIR "what to do"     prints the task number at once
+    live-task --run-dir DIR --status         lists the tasks and their states
+
+The voice brain runs this with its Bash tool. The live daemon passes the request
+to the /live mod, which submits it to the session; the result is spoken later.
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from live import tasks  # noqa: E402
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="live-task")
+    ap.add_argument("--run-dir", default=os.environ.get("LIVE_RUN_DIR"))
+    ap.add_argument("--status", action="store_true")
+    ap.add_argument("text", nargs="*")
+    a = ap.parse_args()
+    if not a.run_dir:
+        print("live-task: no --run-dir (is /live running?)", file=sys.stderr)
+        return 2
+    if a.status:
+        rows = tasks.status(a.run_dir)
+        for r in rows:
+            print(f"task {r['task']}: {r['state']}: {r['text']}")
+        if not rows:
+            print("No tasks yet.")
+        return 0
+    text = " ".join(a.text).strip()
+    if not text:
+        print("live-task: give the task as one quoted argument", file=sys.stderr)
+        return 2
+    n = tasks.request(a.run_dir, text)
+    print(f"Handed to Claude Code as task {n}. It is running now in the user's Claude Code session; "
+          f"its report will reach you as [Task {n} finished ...]. You already said you handed it off: end your reply.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

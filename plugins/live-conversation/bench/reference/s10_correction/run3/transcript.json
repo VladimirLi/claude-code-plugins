@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "How do I undo my last commit?",
+      "asr_text": "How do I undo my last commit?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! If you want to undo your last commit, no worries\u2014it's pretty straightforward. Let me break it down. \n\nIf you haven't pushed your changes yet, you can use the command: \n`git reset --soft HEAD~1`\nThat will undo the last commit but keep your changes in the staging area, so you won't lose any work. \n\nIf you also want to unstage the changes, you can go with: \n`git reset HEAD~1`\n\nAnd if you want to completely discard the changes, you can do:\n`git reset --hard HEAD~1`\n\nBut be careful with that one\u2014it\u2019ll wipe out any changes in your working directory related to that commit.\n\nNow, if you've already pushed the commit to a remote, you'll need to force push after the reset:\n`git push origin branch-name --force`\n\nJust keep in mind that force pushing can affect others working on the same branch.\n\nSo, pick the one that fits your situation, and you\u2019ll be all set!",
+      "text_spoken": "Hey there! If you want to undo your last commit, no worries\u2014it's pretty straightforward. Let me break it down. \n\nIf you haven't pushed your changes yet, you can use the command: \n`git reset --soft HEAD~1`\nThat will undo the last commit but keep your changes in the staging area, so you won't lose any work. \n\nIf you also want to unstage the changes, you can go with: \n`git reset HEAD~1`\n\nAnd if you want to completely discard the changes, you can do:\n`git reset --hard HEAD~1`\n\nBut be careful with that one\u2014it\u2019ll wipe out any changes in your working directory related to that commit.\n\nNow, if you've already pushed the commit to a remote, you'll need to force push after the reset:\n`git push origin branch-name --force`\n\nJust keep in mind that force pushing can affect others working on the same branch.\n\nSo, pick the one that fits your situation, and you\u2019ll be all set!",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "No, I meant undo it but keep the changes.",
+      "asr_text": "No, I meant undo it but keep the changes."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Ah, got it! You want to undo the commit but keep all the changes intact. No problem at all! The best command for that is this:\n\n`git reset --soft HEAD~1`\n\nThat\u2019ll remove the last commit but leave all your files exactly as they were\u2014everything will still be staged, just like before the commit. That way, you can tweak whatever you need or recommit it. Easy peasy!",
+      "text_spoken": "Ah, got it! You want to undo the commit but keep all the changes intact. No problem at all! The best command for that is this:\n\n`git reset --soft HEAD~1`\n\nThat\u2019ll remove the last commit but leave all your files exactly as they were\u2014everything will still be staged, just like before the commit. That way, you can tweak whatever you need or recommit it. Easy peasy!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

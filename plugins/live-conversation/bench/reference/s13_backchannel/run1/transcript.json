@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Walk me through how a hash map works.",
+      "asr_text": "Walk me through how a hash map works."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Alright, let\u2019s dive into it! A hash map is like a super clever filing system. Imagine you\u2019ve got a big shelf full of boxes. Each box has a label, and that label comes from taking whatever key you\u2019re using and running it through a special function",
+      "text_spoken": "Alright, let\u2019s dive into it! A hash map is",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Mm-hmm.",
+      "asr_text": "Mhm."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Alright, let's dive in! A HashMap is a data structure that stores key-value pairs. It uses a hash function to map keys to specific \u2018buckets\u2019 or \u2018slots\u2019 in an array. When you put something into a HashMap, the key goes through the hash function, which determines the index where the value will be stored. \n\nWhen you want to retrieve a value, you provide the key, it gets hashed again, and the HashMap knows exactly which bucket to look in. If there are multiple items in that bucket, called a collision, it uses techniques like linked lists or trees to find the exact match for your key. \n\nThis makes lookups and inserts super fast, usually constant time on average. That\u2019s the beauty of a HashMap!",
+      "text_spoken": "Alright, let's dive in! A HashMap is a data structure that stores key-value pairs. It uses a hash function to map keys to specific \u2018buckets\u2019 or \u2018slots\u2019 in an array. When you put something into a HashMap, the key goes through the hash function, which determines the index where the value will be stored. \n\nWhen you want to retrieve a value, you provide the key, it gets hashed again, and the HashMap knows exactly which bucket to look in. If there are multiple items in that bucket, called a collision, it uses techniques like linked lists or trees to find the exact match for your key. \n\nThis makes lookups and inserts super fast, usually constant time on average. That\u2019s the beauty of a HashMap!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

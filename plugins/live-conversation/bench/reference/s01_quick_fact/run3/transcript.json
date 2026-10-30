@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "What's the capital of Australia?",
+      "asr_text": "What's the capital of Australia?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! The capital of Australia is Canberra. It\u2019s a lovely city, located between Sydney and Melbourne, and it\u2019s known for its national museums, galleries, and government buildings. Great question!",
+      "text_spoken": "Hey there! The capital of Australia is Canberra. It\u2019s a lovely city, located between Sydney and Melbourne, and it\u2019s known for its national museums, galleries, and government buildings. Great question!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

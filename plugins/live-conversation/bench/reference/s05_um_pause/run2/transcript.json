@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I want to, um, change the way the, uh, the login page handles errors.",
+      "asr_text": "I want to, um... Change the way the login page handles errors."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! We can totally revamp how the login page deals with errors. Do you want a more user-friendly error message system, like clearer instructions or a pop-up? Or maybe some real-time validation to help users as they type? Tell me more about what you\u2019re thinking.",
+      "text_spoken": "Sure thing! We can totally revamp how the login page deals with errors. Do you want a more user-friendly error message system, like clearer instructions or a pop-up? Or maybe some real-time validation to help users as they type? Tell me more about what you\u2019re thinking.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

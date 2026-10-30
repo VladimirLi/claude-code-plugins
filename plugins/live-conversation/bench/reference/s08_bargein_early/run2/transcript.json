@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Tell me about the history of the Roman Empire.",
+      "asr_text": "Tell me about the history of the Roman Empire."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Oh, the history of the Roman Empire is absolutely fascinating! Let me take you on a quick journey. \n\nIt all began in 753 BCE, when, according to legend, Romulus founded the city of Rome. Over time, it grew from a small city",
+      "text_spoken": "Oh, the history of the Roman Empire is",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Actually, just give me the short version.",
+      "asr_text": "Actually, just give me the short version."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Sure thing! Here\u2019s the short and punchy version: The Roman Empire started in 27 BCE with Augustus as its first emperor. It grew massively, covering much of Europe, North Africa, and the Middle East. It had a long period of peace called the Pax Romana, but eventually it split into Eastern and Western halves. The Western half fell in 476 CE, while the Eastern, or Byzantine Empire, lasted another thousand years. And that\u2019s your quick history snapshot!",
+      "text_spoken": "Sure thing! Here\u2019s the short and punchy version: The Roman Empire started in 27 BCE with Augustus as its first emperor. It grew massively, covering much of Europe, North Africa, and the Middle East. It had a long period of peace called the Pax Romana, but eventually it split into Eastern and Western halves. The Western half fell in 476 CE, while the Eastern, or Byzantine Empire, lasted another thousand years. And that\u2019s your quick history snapshot!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1307.14, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 948}
+{"t_ms": 3612.33, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4740.2, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 4096}
+{"t_ms": 4742.08, "event": "x_committed", "turn": 1}
+{"t_ms": 4742.56, "event": "x_response_created", "turn": 1}
+{"t_ms": 5302.59, "event": "final_transcript", "turn": 1, "text": "Tell me about the history of the Roman Empire."}
+{"t_ms": 5413.43, "event": "first_reply_text", "turn": 1, "text": "Oh"}
+{"t_ms": 5565.54, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 7350.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 8143.42, "event": "playback_stopped", "turn": 1, "spoken_text": "Oh, let me take you on an epic journey!"}
+{"t_ms": 8143.44, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 7092}
+{"t_ms": 8143.44, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 8228.72, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 9731.12, "event": "user_speech_end", "turn": 2}
+{"t_ms": 10864.8, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 10208}
+{"t_ms": 10864.83, "event": "x_committed", "turn": 2}
+{"t_ms": 10866.0, "event": "x_response_created", "turn": 2}
+{"t_ms": 11487.13, "event": "final_transcript", "turn": 2, "text": "Actually, just give me the short version."}
+{"t_ms": 11799.65, "event": "first_reply_text", "turn": 2, "text": "Got"}
+{"t_ms": 11865.29, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 49435.12, "event": "reply_audio_end", "turn": 2}

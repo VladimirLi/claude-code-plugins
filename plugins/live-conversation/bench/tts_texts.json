@@ -1,0 +1,13 @@
+{
+  "_comment": "Fixed reply texts for the tts piece. Both sides speak exactly these. Mix of short, question, list-like content said conversationally, numbers/code words, and an emotional register.",
+  "texts": [
+    {"id": "t01_short", "text": "Canberra. Most people guess Sydney, so you're in good company if you did."},
+    {"id": "t02_question", "text": "Oh nice, how long was the walk? Sounds like you earned a lazy evening."},
+    {"id": "t03_repo", "text": "It's a collection of Claude Code plugins. There's a brain dump tool for voice prompts, a status line, a switchboard for turning mods on and off, and a cache timer."},
+    {"id": "t04_ack", "text": "Sure, running them now. This might take a few seconds."},
+    {"id": "t05_numbers", "text": "Two hundred and forty tests passed, three failed, all in the auth module. Want me to look at the first one?"},
+    {"id": "t06_code_words", "text": "Run git reset dash dash soft HEAD tilde one. That undoes the commit but keeps your changes staged."},
+    {"id": "t07_long", "text": "Honestly, I'd hold off on the rewrite. Rewrites feel clean, but you lose all the small fixes you've made along the way. I'd pick the part that breaks most often, put a few tests around it, and clean that up first. If it still feels hopeless after a week, then rewrite, but you'll know much more about what you actually need."},
+    {"id": "t08_empathy", "text": "Ugh, that's frustrating. Okay, let's figure it out together. What did you change right before it broke?"}
+  ]
+}

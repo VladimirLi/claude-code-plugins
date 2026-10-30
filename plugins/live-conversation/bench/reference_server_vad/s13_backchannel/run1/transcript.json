@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Walk me through how a hash map works.",
+      "asr_text": "Walk me through how a hash map works."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Alright, let\u2019s break it down in a fun and simple way! Imagine a hash map is like a giant set of mailboxes. Each mailbox has its own unique number, called a hash. When you want to store something, you run it through a special function, a hash function, that quickly figures out which mailbox it belongs to. Then it pops your data right in there.\n\nNow, when you need to find that data again, you take the key, run it through the same hash function,",
+      "text_spoken": "Alright, let\u2019s break it down in a fun and simple way! Imagine a hash map is like",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Mm-hmm.",
+      "asr_text": "Mm-mm."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "\u2026and voil\u00e0! The hash function tells you exactly which mailbox to check. You open it up and\u2014boom\u2014there\u2019s your data, fast and efficient. Now, sometimes two different keys might lead to the same mailbox\u2014this is called a collision. Good hash maps handle collisions by storing both items in that mailbox, maybe as a little list inside. When you look up your data, it quickly scans that list to find the exact match. \n\nSo, in a nutshell, a hash map is just a super speedy way to store and retrieve data by using these hash functions and mailboxes.",
+      "text_spoken": "\u2026and voil\u00e0! The hash function tells you exactly which mailbox to check. You open it up and\u2014boom\u2014there\u2019s your data, fast and efficient. Now, sometimes two different keys might lead to the same mailbox\u2014this is called a collision. Good hash maps handle collisions by storing both items in that mailbox, maybe as a little list inside. When you look up your data, it quickly scans that list to find the exact match. \n\nSo, in a nutshell, a hash map is just a super speedy way to store and retrieve data by using these hash functions and mailboxes.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

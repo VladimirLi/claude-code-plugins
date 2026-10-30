@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Hey, how's it going? I just got back from a really long walk and I'm kind of wiped out.",
+      "asr_text": "Hey, how's it going? I just got back from a really long walk and I'm kind of wiped out."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, welcome back! Sounds like you had quite the trek! I'm doing great, and I'm here to help you recharge. How was the walk? What did you see out there?",
+      "text_spoken": "Hey, welcome back! Sounds like you had quite the trek! I'm doing great, and I'm here to help you recharge. How was the walk? What did you see out there?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "id": "s05_um_pause",
+  "kind": "mid_utterance_pause",
+  "description": "User hesitates with fillers and long pauses mid-sentence. The system must not cut in at either pause.",
+  "turns": [
+    {
+      "turn": 1,
+      "text": "I want to, um, change the way the, uh, the login page handles errors.",
+      "segments": [
+        {
+          "text": "I want to, um,",
+          "speech_start_sample": 4800,
+          "speech_end_sample": 35881,
+          "speech_start_ms": 200.0,
+          "speech_end_ms": 1495.042
+        },
+        {
+          "text": "change the way the, uh,",
+          "speech_start_sample": 65401,
+          "speech_end_sample": 102204,
+          "speech_start_ms": 2725.042,
+          "speech_end_ms": 4258.5
+        },
+        {
+          "text": "the login page handles errors.",
+          "speech_start_sample": 124463,
+          "speech_end_sample": 167040,
+          "speech_start_ms": 5185.958,
+          "speech_end_ms": 6960.0
+        }
+      ],
+      "pauses": [
+        {
+          "after_segment": 0,
+          "silence_start_sample": 35881,
+          "silence_end_sample": 65401,
+          "silence_ms": 1230.0,
+          "scripted_pause_ms": 1200,
+          "silence_start_ms": 1495.042,
+          "silence_end_ms": 2725.042
+        },
+        {
+          "after_segment": 1,
+          "silence_start_sample": 102204,
+          "silence_end_sample": 124463,
+          "silence_ms": 927.458,
+          "scripted_pause_ms": 900,
+          "silence_start_ms": 4258.5,
+          "silence_end_ms": 5185.958
+        }
+      ],
+      "start": {
+        "anchor": "session_start",
+        "offset_ms": 1000
+      },
+      "barge_in": false,
+      "backchannel": false,
+      "voice": "Samantha",
+      "rate_wpm": 180,
+      "audio": {
+        "24k": {
+          "file": "turn_01_24k.wav",
+          "sample_rate": 24000,
+          "num_samples": 174960,
+          "speech_start_sample": 4800,
+          "speech_end_sample": 167040
+        },
+        "16k": {
+          "file": "turn_01_16k.wav",
+          "sample_rate": 16000,
+          "num_samples": 116640,
+          "speech_start_sample": 3200,
+          "speech_end_sample": 111360
+        }
+      },
+      "speech_start_ms": 200.0,
+      "speech_end_ms": 6960.0
+    }
+  ],
+  "generator": {
+    "tool": "macOS say + sox",
+    "noise_floor_dbfs": -65.0,
+    "speech_threshold_dbfs": -48,
+    "lead_in_ms": 200,
+    "tail_ms": 300
+  }
+}

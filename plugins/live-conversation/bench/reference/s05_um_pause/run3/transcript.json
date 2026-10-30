@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I want to, um, change the way the, uh, the login page handles errors.",
+      "asr_text": "I want to, um... Change the way the ah The login page handles errors."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, you want to change how the login page handles errors, right? No problem! We can tweak the way it shows error messages, or the design, or even the logic behind it. Tell me more\u2014are you aiming for friendlier messages, a different layout, or maybe some kind of error logging? Let\u2019s figure it out together!",
+      "text_spoken": "Hey, you want to change how the login page handles errors, right? No problem! We can tweak the way it shows error messages, or the design, or even the logic behind it. Tell me more\u2014are you aiming for friendlier messages, a different layout, or maybe some kind of error logging? Let\u2019s figure it out together!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

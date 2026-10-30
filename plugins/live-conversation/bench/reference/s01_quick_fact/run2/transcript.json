@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "What's the capital of Australia?",
+      "asr_text": "What's the capital of Australia?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, the capital of Australia is Canberra! It's a bit of a fun fact, because a lot of people might guess Sydney or Melbourne, but nope\u2014Canberra's the one.",
+      "text_spoken": "Hey, the capital of Australia is Canberra! It's a bit of a fun fact, because a lot of people might guess Sydney or Melbourne, but nope\u2014Canberra's the one.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

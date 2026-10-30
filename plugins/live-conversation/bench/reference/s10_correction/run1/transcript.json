@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "How do I undo my last commit?",
+      "asr_text": "How do I undo my last commit?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, great question! If you want to undo your last commit, it depends on whether you\u2019ve pushed it to a remote repository or not. If you haven\u2019t pushed it yet, you can use the command `git reset HEAD~1` to remove the commit but keep your changes. If you want to completely discard the changes, you can add the `--hard` flag: `git reset --hard HEAD~1`. If you\u2019ve already pushed the commit, you might want to use `git revert HEAD` instead, because that creates a new commit that undoes the changes, which is safer for shared branches. That way, your repository stays tidy and coordinated.",
+      "text_spoken": "Hey, great question! If you want to undo your last commit, it depends on whether you\u2019ve pushed it to a remote repository or not. If you haven\u2019t pushed it yet, you can use the command `git reset HEAD~1` to remove the commit but keep your changes. If you want to completely discard the changes, you can add the `--hard` flag: `git reset --hard HEAD~1`. If you\u2019ve already pushed the commit, you might want to use `git revert HEAD` instead, because that creates a new commit that undoes the changes, which is safer for shared branches. That way, your repository stays tidy and coordinated.",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "No, I meant undo it but keep the changes.",
+      "asr_text": "No, I meant undo it but keep the changes."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Ah, got it! You want to undo the last commit but keep the changes in your working directory. That\u2019s really simple. Just use the command: `git reset HEAD~1`. This will remove the last commit but leave all the changes in place, so you can make adjustments and commit again when you\u2019re ready.",
+      "text_spoken": "Ah, got it! You want to undo the last commit but keep the changes in your working directory. That\u2019s really simple. Just use the command: `git reset HEAD~1`. This will remove the last commit but leave all the changes in place, so you can make adjustments and commit again when you\u2019re ready.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

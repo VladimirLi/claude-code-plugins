@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "What's the capital of Australia?",
+      "asr_text": "What's the capital of Australia?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "The capital of Australia is Canberra! It's often overshadowed by Sydney and Melbourne, but it's a fascinating city in its own right, full of history, politics, and beautiful surroundings.",
+      "text_spoken": "The capital of Australia is Canberra! It's often overshadowed by Sydney and Melbourne, but it's a fascinating city in its own right, full of history, politics, and beautiful surroundings.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

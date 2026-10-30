@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?",
+      "asr_text": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, that's an interesting thought! Renaming the main branch to \"trunk\" can actually be a fun and meaningful change. A lot of version control systems and teams use \"trunk\" to represent the primary line of development, kind of like the trunk of a tree that branches off into different features and bug fixes. It can help reinforce a solid metaphor for your team. The main thing to keep in mind is making sure everyone on your team is aligned and comfortable with the change. Also, you'll want to update any automation, scripts, or documentation that references the old name. If everyone's on board, it can be a great way to inject some new energy into your workflow.",
+      "text_spoken": "Hey, that's an interesting thought! Renaming the main branch to \"trunk\" can actually be a fun and meaningful change. A lot of version control systems and teams use \"trunk\" to represent the primary line of development, kind of like the trunk of a tree that branches off into different features and bug fixes. It can help reinforce a solid metaphor for your team. The main thing to keep in mind is making sure everyone on your team is aligned and comfortable with the change. Also, you'll want to update any automation, scripts, or documentation that references the old name. If everyone's on board, it can be a great way to inject some new energy into your workflow.",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Yeah.",
+      "asr_text": "Yeah."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Absolutely! Plus, \"trunk\" has that nice, sturdy feel to it, like the core of a tree. It can make the branching structure more intuitive for folks who are visual thinkers. Whatever you decide, clear communication and a little heads-up to the team goes a long way. And hey, it might even spark some new enthusiasm for the project!",
+      "text_spoken": "Absolutely! Plus, \"trunk\" has that nice, sturdy feel to it, like the core of a tree. It can make the branching structure more intuitive for folks who are visual thinkers. Whatever you decide, clear communication and a little heads-up to the team goes a long way. And hey, it might even spark some new enthusiasm for the project!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

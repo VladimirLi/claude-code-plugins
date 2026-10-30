@@ -1,0 +1,5 @@
+runs/
+blind/
+# recorded reference audio (~400 MB): the marketplace repo is cloned on every install
+reference/**/*.wav
+reference_server_vad/**/*.wav

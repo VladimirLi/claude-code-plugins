@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Oh nice, how long was the walk? Sounds like you earned a lazy evening.",
+      "text_spoken": "Oh nice, how long was the walk? Sounds like you earned a lazy evening.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

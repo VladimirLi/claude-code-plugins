@@ -1,0 +1,11 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1291.5, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 2901.21, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4036.17, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 3392}
+{"t_ms": 4036.19, "event": "x_committed", "turn": 1}
+{"t_ms": 4037.32, "event": "x_response_created", "turn": 1}
+{"t_ms": 4570.98, "event": "final_transcript", "turn": 1, "text": "What's the capital of Australia?"}
+{"t_ms": 4701.16, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 4862.42, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 17144.33, "event": "reply_audio_end", "turn": 1}

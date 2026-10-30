@@ -56,6 +56,19 @@
         "keep warm",
         "mod"
       ]
+    },
+    {
+      "name": "live-conversation",
+      "source": "./plugins/live-conversation",
+      "description": "Talk to Claude Code by voice in a live, interruptible conversation; /live starts it, and coding tasks go to your session",
+      "category": "productivity",
+      "keywords": [
+        "voice",
+        "live",
+        "conversation",
+        "speech",
+        "mod"
+      ]
     }
   ]
 }

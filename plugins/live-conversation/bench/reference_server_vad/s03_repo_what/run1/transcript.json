@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "So what does this repo actually do?",
+      "asr_text": "So what does this repo actually do?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! Great question. Let\u2019s dive into it. From what I can see, this repo is all about helping you automate the deployment of machine learning models. It\u2019s got a streamlined pipeline that takes your trained model, packages it up into a container, and then deploys it to a cloud service\u2014like AWS or Azure\u2014so it can serve predictions via an API. It usually includes tools for continuous integration and deployment, monitoring, and version control for the model. In short, it makes the whole lifecycle of deploying and managing ML models way easier and more efficient.",
+      "text_spoken": "Hey there! Great question. Let\u2019s dive into it. From what I can see, this repo is all about helping you automate the deployment of machine learning models. It\u2019s got a streamlined pipeline that takes your trained model, packages it up into a container, and then deploys it to a cloud service\u2014like AWS or Azure\u2014so it can serve predictions via an API. It usually includes tools for continuous integration and deployment, monitoring, and version control for the model. In short, it makes the whole lifecycle of deploying and managing ML models way easier and more efficient.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

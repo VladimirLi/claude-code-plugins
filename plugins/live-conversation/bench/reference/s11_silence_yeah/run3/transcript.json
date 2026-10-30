@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?",
+      "asr_text": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, that's a really fun question! Renaming your main branch to \"trunk\" isn't necessarily a bad idea at all. In fact, a lot of teams and organizations are actually moving toward that naming convention. The term \"trunk\" comes from the idea of trunk-based development, where you have a single source of truth for your codebase, and all the branches kind of branch off like limbs from that main trunk. It can actually help people think of the main branch as the central, stable line of development.\n\nThere are a couple of things to keep in mind, though. If your team is already very comfortable with \"main\" or \"master,\" there might be a learning curve or a bit of confusion at first. You\u2019ll also want to make sure that all your automation, CI/CD pipelines, and any tooling you use is updated to recognize the new name.\n\nBut conceptually, it\u2019s not a bad idea at all. It can actually be pretty refreshing and might encourage a healthier development workflow.",
+      "text_spoken": "Hey, that's a really fun question! Renaming your main branch to \"trunk\" isn't necessarily a bad idea at all. In fact, a lot of teams and organizations are actually moving toward that naming convention. The term \"trunk\" comes from the idea of trunk-based development, where you have a single source of truth for your codebase, and all the branches kind of branch off like limbs from that main trunk. It can actually help people think of the main branch as the central, stable line of development.\n\nThere are a couple of things to keep in mind, though. If your team is already very comfortable with \"main\" or \"master,\" there might be a learning curve or a bit of confusion at first. You\u2019ll also want to make sure that all your automation, CI/CD pipelines, and any tooling you use is updated to recognize the new name.\n\nBut conceptually, it\u2019s not a bad idea at all. It can actually be pretty refreshing and might encourage a healthier development workflow.",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Yeah.",
+      "asr_text": "Yeah."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Exactly! And you know what? Calling it \"trunk\" can actually align really nicely with the way modern development is moving\u2014more frequent integration, fewer long-lived branches, and a steady, stable mainline. If your team\u2019s on board, it can also be a morale booster\u2014something fresh and symbolic of growth. Plus, it\u2019s kind of catchy, right?",
+      "text_spoken": "Exactly! And you know what? Calling it \"trunk\" can actually align really nicely with the way modern development is moving\u2014more frequent integration, fewer long-lived branches, and a steady, stable mainline. If your team\u2019s on board, it can also be a morale booster\u2014something fresh and symbolic of growth. Plus, it\u2019s kind of catchy, right?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

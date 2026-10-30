@@ -1,0 +1,11 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1277.93, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3911.42, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4926.41, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 4860}
+{"t_ms": 4926.44, "event": "x_committed", "turn": 1}
+{"t_ms": 4936.59, "event": "x_response_created", "turn": 1}
+{"t_ms": 5620.03, "event": "final_transcript", "turn": 1, "text": "Can you run the tests and tell me if anything's broken?"}
+{"t_ms": 5621.74, "event": "first_reply_text", "turn": 1, "text": "Sure"}
+{"t_ms": 5784.62, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 16455.0, "event": "reply_audio_end", "turn": 1}

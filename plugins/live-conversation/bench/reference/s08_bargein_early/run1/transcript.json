@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Tell me about the history of the Roman Empire.",
+      "asr_text": "Tell me about the history of the Roman Empire."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Oh, let me take you on an epic journey! The Roman Empire has one of the most fascinating histories in the world. It all began in 27 BCE, when Octavian, later known as Augustus, became the first emperor, marking the transition from the Roman Republic",
+      "text_spoken": "Oh, let me take you on an epic",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Actually, just give me the short version.",
+      "asr_text": "Actually, just give me the short version."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Got it! Here\u2019s the short version: The Roman Empire started around 27 BCE when Octavian, later known as Augustus, became the first emperor. It expanded massively, dominating much of Europe, North Africa, and the Middle East. It had a long period of peace called the Pax Romana. Eventually, it split into the Western and Eastern Empires. The Western Empire fell in 476 CE, while the Eastern, or Byzantine Empire, continued for another thousand years until 1453. It left a gigantic cultural and political legacy.",
+      "text_spoken": "Got it! Here\u2019s the short version: The Roman Empire started around 27 BCE when Octavian, later known as Augustus, became the first emperor. It expanded massively, dominating much of Europe, North Africa, and the Middle East. It had a long period of peace called the Pax Romana. Eventually, it split into the Western and Eastern Empires. The Western Empire fell in 476 CE, while the Eastern, or Byzantine Empire, continued for another thousand years until 1453. It left a gigantic cultural and political legacy.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

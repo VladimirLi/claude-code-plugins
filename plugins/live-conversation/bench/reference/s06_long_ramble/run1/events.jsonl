@@ -1,0 +1,11 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1287.61, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 28027.46, "event": "user_speech_end", "turn": 1}
+{"t_ms": 29166.55, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 28512}
+{"t_ms": 29166.67, "event": "x_committed", "turn": 1}
+{"t_ms": 29166.71, "event": "x_response_created", "turn": 1}
+{"t_ms": 30220.02, "event": "final_transcript", "turn": 1, "text": "Okay, so here's the thing. I've been working on this side project for a couple of months now. It's basically a little app that tracks what I eat and suggests recipes. And it was going great at first, but lately every time I add a feature, something else breaks. And I'm starting to wonder if I should just rewrite the whole thing from scratch, or if that's a terrible idea and I should just add tests and clean it up bit by bit. What would you do?"}
+{"t_ms": 30220.18, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 30276.83, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 85093.33, "event": "reply_audio_end", "turn": 1}

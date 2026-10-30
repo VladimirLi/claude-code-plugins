@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Hey, how's it going? I just got back from a really long walk and I'm kind of wiped out.",
+      "asr_text": "Hey, how's it going? I just got back from a really long walk and I'm kind of wiped out."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! Welcome back from that walk! Sounds like you really pushed yourself. I'm guessing you're feeling a mix of tired and maybe a little accomplished too, huh? Let me know if you need some tips for relaxing or a bit of motivation to recharge. You did great getting out there!",
+      "text_spoken": "Hey there! Welcome back from that walk! Sounds like you really pushed yourself. I'm guessing you're feeling a mix of tired and maybe a little accomplished too, huh? Let me know if you need some tips for relaxing or a bit of motivation to recharge. You did great getting out there!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}
