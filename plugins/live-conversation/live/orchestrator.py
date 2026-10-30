@@ -65,11 +65,11 @@ DEFAULTS = {
     # short holding line, then again after keepalive_every_ms; 0 = off
     "keepalive_after_ms": 4500.0,
     "keepalive_every_ms": 9000.0,
-    # announce(): speak only after the conversation was free (no user speech, no reply) this long
     # at a turn end, run the TTS model once on a throwaway piece so the reply's first piece
     # does not pay for a model gone cold while the user talked (tts.warm)
     "warm_tts": True,
-    "announce_quiet_ms": 800.0,        # play the predicted filler at the turn end, not after the final transcript   # the brain hears which filler opened the reply, so it does not acknowledge twice
+    # announce(): speak only after the conversation was free (no user speech, no reply) this long
+    "announce_quiet_ms": 800.0,
 }
 
 
