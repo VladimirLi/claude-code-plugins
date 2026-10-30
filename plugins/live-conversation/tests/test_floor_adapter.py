@@ -125,6 +125,22 @@ class TestPause(unittest.TestCase):
         self.assertEqual(events(log, "playback_paused"), [])  # a hold is no barge-in
 
 
+class TestTurnEnd(unittest.TestCase):
+    def test_turn_end_warms_the_tts_and_logs_the_endpoint(self):
+        s = Script()
+        s.segment(100, 1100, Q1)
+        o, log = make(s)
+        o.c.tts.warmed = 0
+
+        async def warm():
+            o.c.tts.warmed += 1
+        o.c.tts.warm = warm
+        o.c.endpointer.trace = [{"pause_start_ms": 1100.0, "class": "yield"}]
+        asyncio.run(drive(o))
+        self.assertEqual(o.c.tts.warmed, 1)
+        self.assertEqual(len(events(log, "x_endpoint")), 1)
+
+
 class TestRewindAndDuck(unittest.TestCase):
     def test_long_pause_rewinds_to_a_word_start(self):
         s = Script()

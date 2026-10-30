@@ -86,6 +86,7 @@ class FloorAdapter:
             if k in ocfg:
                 fcfg.setdefault(k, ocfg[k])
         self.duck_db = float(fcfg.pop("duck_db", -12.0))      # the sink's gain while ducked
+        self.warm_tts = bool(ocfg.get("warm_tts", True))
         self.floor = F.Floor(fcfg)
         self.clock = log.clock
         self.sink = audio.sink
@@ -171,13 +172,31 @@ class FloorAdapter:
                     hint = self.audio.turn_hint()
                     self._on(F.SpeechStart(self.g, str(utt), None if hint is None else str(hint)))
                 elif d.kind == "turn_end":
+                    self._log_endpoint()
                     self._on(F.TurnEnd(self.g, d.pause_start_ms))
+                    self._warm_tts()
                     self._spawn(self._final(self.utt_of.get(self.g)))
             for name, at in sorted(self.timers.items(), key=lambda kv: kv[1]):
                 if at <= self.clock.ms and self.timers.get(name) == at:
                     del self.timers[name]
                     self._on(F.Timer(name))
         await asyncio.sleep(0)
+
+    def _log_endpoint(self) -> None:
+        """x_endpoint, as the old path logs it: why the endpointer ended the turn (live-review)."""
+        tr = getattr(self.c.endpointer, "trace", None)
+        if tr and isinstance(tr[-1], dict) and "pause_start_ms" in tr[-1]:
+            x = tr[-1]
+            self.log.emit("x_endpoint", None, pause_start_ms=x.get("pause_start_ms"), cls=x.get("class"),
+                          text_ms=x.get("text_ms"), smart_turn=x.get("smart_turn"))
+
+    def _warm_tts(self) -> None:
+        """Turn end: get the TTS model hot while the brain thinks (tts.warm), unless a reply is
+        making or playing audio (then it is hot, and a warm-up would queue in front)."""
+        warm = getattr(self.c.tts, "warm", None)
+        if warm is None or not self.warm_tts or self.reply is not None or self.sink.is_playing():
+            return
+        self._spawn(warm())
 
     def _on_interim(self, utt: int, text: str) -> None:
         try:
