@@ -54,6 +54,15 @@ def fricative(ms, db=-22.0):
     return x.astype(np.int16)
 
 
+def rumble(ms, f=35.0, db=-30.0):
+    """Breath on the mic or a bump: a slow 30-40 Hz swell, nothing a voice makes."""
+    t = np.arange(int(SR * ms / 1000)) / SR
+    env = np.sin(np.pi * t / t[-1]) ** 0.5
+    x = env * np.sin(2 * np.pi * f * t) + 0.2 * env * np.sin(2 * np.pi * 2 * f * t)
+    x = x / np.sqrt(np.mean(x * x)) * 32768 * 10 ** (db / 20)
+    return x.astype(np.int16)
+
+
 def run(bi, x, speaking=True, t0=0.0):
     """Feed x frame by frame; returns [(decision, t_ms)]."""
     out = []
@@ -175,6 +184,37 @@ class TestNoiseEvents(unittest.TestCase):
         click = noise(20, -6)
         x = np.concatenate([noise(500), click, noise(500), noise(3000, -38)])
         self.assertNotIn("barge_in", kinds(run(bi, x)))
+
+
+class TestRumble(unittest.TestCase):
+    # live session 20261030-110521: a 30-40 Hz rumble at -30..-45 dBFS (all energy below 60 Hz)
+    # stopped three replies, rules "long" twice and "burst" once; nothing was said.
+    def test_long_rumble_does_not_barge_in(self):
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(1500), rumble(700), noise(500)]))
+        self.assertEqual(dec, [])
+
+    def test_two_rumbles_do_not_barge_in(self):
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(1500), rumble(300, db=-38), noise(200), rumble(250, f=30, db=-36),
+                                      noise(500)]))
+        self.assertEqual(dec, [])
+
+    def test_rumble_without_highpass_reproduces_the_live_bug(self):
+        bi = BargeIn({"highpass_hz": 0})
+        dec = run(bi, np.concatenate([noise(1500), rumble(1000), noise(500)]))
+        self.assertIn("barge_in", kinds(dec))
+
+    def test_low_voice_still_barges_in(self):
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(500), hum(900, f0=85.0), noise(500)]))
+        self.assertEqual(kinds(dec), ["duck", "barge_in"])
+
+    def test_voice_over_rumble_still_barges_in(self):
+        bi = BargeIn()
+        x = np.concatenate([noise(1500), vowel(400)])
+        x[1500 * SR // 1000:] += rumble(400, db=-25)
+        self.assertIn("barge_in", kinds(run(bi, x)))
 
 
 class TestAfterInterruptMetric(unittest.TestCase):

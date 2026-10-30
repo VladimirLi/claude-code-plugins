@@ -55,6 +55,7 @@ from collections import deque
 from typing import Optional
 
 import numpy as np
+from scipy.signal import butter, sosfilt, sosfilt_zi
 
 from .events import FRAME, FRAME_MS, SR
 
@@ -81,6 +82,7 @@ DEFAULTS = {
     "floor_window_ms": 1500.0,  # noise floor = quietest frame in this window (+ floor_offset_db)
     "floor_offset_db": 3.0,
     "initial_floor_db": -70.0,  # floor assumed before the mic has been heard for floor_window_ms
+    "highpass_hz": 80.0,       # mic high-pass before all features (0 = off): below any voice's pitch
 }
 
 BACKCHANNEL_RE = re.compile(
@@ -135,6 +137,10 @@ class BargeIn:
         self._levels: deque = deque([self.cfg["initial_floor_db"] - self.cfg["floor_offset_db"]] * n, maxlen=n)
         self.floor_db = self.cfg["initial_floor_db"]   # noise floor estimate, survives reset()
         self._prev: Optional[np.ndarray] = None
+        self._hp = None
+        if self.cfg["highpass_hz"] > 0:
+            self._hp_sos = butter(4, self.cfg["highpass_hz"], "highpass", fs=SR, output="sos")
+            self._hp = sosfilt_zi(self._hp_sos) * 0.0
         self.last: dict = {}
         self._resumed: Optional[tuple] = None   # (t_ms, speech_ms) of the last "resume"
         self._was_speaking = False
@@ -231,7 +237,17 @@ class BargeIn:
             return "long"
         return None
 
+    def _highpass(self, frame: np.ndarray) -> np.ndarray:
+        # A 30-40 Hz rumble (breath on the mic, a bump) is loud and periodic, so unfiltered it
+        # passed as long voiced speech: live session 20261030-110521 had three false barge-ins
+        # on it at -30..-45 dBFS with nothing said. Voices have no energy that low.
+        if self._hp is None:
+            return frame
+        y, self._hp = sosfilt(self._hp_sos, frame.astype(np.float64), zi=self._hp)
+        return y
+
     def feed(self, frame: np.ndarray, t_ms: float, assistant_speaking: bool) -> Optional[str]:
+        frame = self._highpass(frame)
         f = frame_features(frame, self._prev)
         self._prev = frame
         self._track_floor(f["db"])
