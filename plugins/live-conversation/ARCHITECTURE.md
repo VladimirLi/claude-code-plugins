@@ -140,8 +140,10 @@ await orch.start(); await orch.run(); orch.transcript(scripts); await orch.close
 ```
 Writes `turn_end_detected`, `final_transcript`, `first_reply_text`,
 `barge_in_detected`. Events of a reply carry the user turn it answers. If the
-user starts speaking again before any reply audio, the reply is cancelled and
-the two parts are merged into one turn.
+user makes a sound again before any reply audio, the reply is held (it keeps
+going, nothing plays). If that segment's transcript has words, the reply is
+cancelled and the two parts are merged into one turn; if not (noise, a breath),
+the held reply plays and is not restarted (`x_resume` hold / kept / merged).
 
 e2e wiring (see the module docstring): `build()` applies `E2E_OVERLAY` under each
 module section (a key in the config still wins), today the on-device endpointer

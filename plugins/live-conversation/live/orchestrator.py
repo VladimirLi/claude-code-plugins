@@ -46,7 +46,7 @@ from .endpointing import Endpointer
 from .events import SR, EventLog
 from .stt import BaseSTT
 from .tts import Chunker
-from .turntaking import TurnContext, TurnTaking
+from .turntaking import TurnContext, TurnTaking, is_hesitation, normalize
 
 KEEPALIVE = ["Still on it.", "Hang on.", "Almost there.", "Still going.", "Bear with me.", "Nearly done."]
 
@@ -95,6 +95,10 @@ class Reply:
     decided_ms: float = 0.0                        # session clock when the reply was decided
     after_interrupt: bool = False
     announce: bool = False                         # not an answer to a user turn (announce())
+    # Set while the user made a sound after their turn ended and before any reply audio: the reply
+    # keeps going but plays nothing until that sound's transcript says whether it was words.
+    held: Optional[asyncio.Event] = None
+    held_gen: int = 0                              # the latest segment the reply waits on
 
 
 @dataclass
@@ -256,10 +260,11 @@ class Orchestrator:
             self._cancel_reply(keep_record=False)   # announce() tries again once the user is done
             r = None
         if r is not None and not r.audio_started and self.reply_task and not self.reply_task.done():
-            # User kept talking before any reply audio: merge into one turn.
+            # Sound before any reply audio. The reply is held, not cancelled: only words in this
+            # segment's transcript merge the two parts into one turn (_handle_turn). Noise, a
+            # breath or a click (no words) lets the held reply play, so it is not restarted.
             if self.c.turntaking.on_user_resumed(TurnContext(r.user_text)) == "merge":
-                self.carry = r.user_text
-                self._cancel_reply(keep_record=False)
+                self._hold(r)
                 self.label = hint if hint is not None else self.label
                 self.c.stt.begin()
                 return
@@ -453,7 +458,30 @@ class Orchestrator:
             self.c.endpointer.on_transcript(full, True)
             self.c.bargein.on_transcript(full)
         early = self._take_early(label)
-        if gen != self.gen or (early is not None and early["flushed"]):
+        held = self.reply if (self.reply is not None and self.reply.held is not None) else None
+        if held is not None and early is None:
+            norm = normalize(text)
+            if not norm or is_hesitation(norm):
+                # No words: the user did not go on. The held reply stands (or keeps waiting on a
+                # newer segment that already started).
+                self.log.emit("x_resume", label, decision="kept", text=text)
+                if gen == self.gen and held.held_gen == gen:
+                    self._release(held)
+                return
+            # Words: one turn, as before any reply audio.
+            self.log.emit("x_resume", label, decision="merged", text=text)
+            full = (held.user_text + " " + full).strip()
+            if held.turn is not None and held.turn != label:
+                self.user_turns.pop(held.turn, None)
+            self._cancel_reply(keep_record=False)
+            self.reply_task = None
+        hold_gen = None
+        if (gen != self.gen and early is None
+                and self.c.turntaking.on_user_resumed(TurnContext(full)) == "merge"):
+            # The user made a sound while this turn's transcript was on its way: start the reply
+            # anyway, held until that sound's transcript says whether it was words.
+            hold_gen = self.gen
+        if (gen != self.gen and hold_gen is None) or (early is not None and early["flushed"]):
             if early is not None and not early["flushed"]:
                 self._stop_early(early)
             self.carry = full          # user is speaking again; merge on next turn end
@@ -476,6 +504,8 @@ class Orchestrator:
             r.sentences.append(early["filler"])
             r.writes = early["writes"]                  # the split filler may still be writing
             r.audio_started = True
+        if hold_gen is not None:
+            self._hold(r, hold_gen)
         self.reply = r
         self.replies.append(r)
         interrupted, self.pending_interrupt = self.pending_interrupt, None
@@ -548,6 +578,7 @@ class Orchestrator:
                     pcm = await q.get()
                     if pcm is None:
                         break
+                    await self._unheld(r)
                     start = self.sink.write(pcm, turn=r.turn, filler=is_filler)
                     if not is_filler and not r.content_started:
                         r.content_started = True
@@ -582,7 +613,7 @@ class Orchestrator:
         while True:
             await asyncio.sleep(0.1)
             now = self.clock.ms
-            if self.sink.is_playing() or not order.empty():
+            if self.sink.is_playing() or not order.empty() or r.held is not None:
                 quiet_since = max(now, self.sink.queued_end_ms)
                 continue
             if now - quiet_since < after or now - last_said < every:
@@ -641,6 +672,22 @@ class Orchestrator:
                 out.append(" ".join(words[:k]))
             break
         return " ".join(out)
+
+    def _hold(self, r: Reply, gen: Optional[int] = None) -> None:
+        """Keep the reply going but play none of it until _release (see _on_speech_start)."""
+        if r.held is None:
+            r.held = asyncio.Event()
+            self.log.emit("x_resume", r.turn, decision="hold")
+        r.held_gen = self.gen if gen is None else gen
+
+    def _release(self, r: Reply) -> None:
+        if r.held is not None:
+            r.held.set()
+            r.held = None
+
+    async def _unheld(self, r: Reply) -> None:
+        while r.held is not None:
+            await r.held.wait()
 
     def _cancel_reply(self, keep_record: bool) -> None:
         r = self.reply

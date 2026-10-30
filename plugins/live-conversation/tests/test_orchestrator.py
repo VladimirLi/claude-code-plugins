@@ -260,5 +260,89 @@ class TestBargeInDuringFiller(unittest.TestCase):
         asyncio.run(go())
 
 
+class SeqSTT(FakeSTT):
+    """Finals in order: the user's turn, then each resumed segment."""
+
+    def __init__(self, texts):
+        super().__init__("")
+        self.texts = list(texts)
+
+    async def finalize(self):
+        return self.texts.pop(0)
+
+
+def make_resume(texts, brain_delay=0.3):
+    log = EventLog(Clock())
+    audio = FakeAudio(log)
+    c = Components(endpointer=Nop(), stt=SeqSTT(texts), brain=FakeBrain("The yes is for the fix.", delay=brain_delay),
+                   tts=FakeTTS(0.01), bargein=Nop(), turntaking=TurnTaking({"fillers": False}))
+    return Orchestrator(audio, log, c, {"orchestrator": {"keepalive_after_ms": 0}}), log
+
+
+class TestResumedNoise(unittest.TestCase):
+    """Bar session 20261030-110521, turn 3: "What do you need my yes for?" was answered, then quiet
+    noise (no words, final "") started a segment before any reply audio. The reply was cancelled
+    and sent again with the same text, three times (13.4 s to first sound)."""
+
+    def test_wordless_sound_does_not_restart_the_reply(self):
+        async def go():
+            o, log = make_resume(["What do you need my yes for?", "", ""])
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            for _ in range(2):                       # two noise segments before any reply audio
+                o._on_speech_start()
+                self.assertIs(o.reply, r)            # held, not cancelled
+                await asyncio.sleep(0.1)
+                self.assertFalse(r.audio_started)    # nothing plays while the sound may be words
+                o.in_user_turn = False
+                await o._handle_turn(o.label, o.gen)
+            await o.reply_task
+            self.assertEqual(len(o.c.brain.calls), 1)
+            self.assertEqual(o.c.brain.cancelled, 0)
+            self.assertTrue(r.content_started)
+            self.assertFalse([e for e in log.events if e.event == "x_reply_text" and e.extra.get("interrupted")])
+            self.assertEqual(o.user_turns[r.turn], "What do you need my yes for?")
+        asyncio.run(go())
+
+    def test_resumed_words_merge_into_one_turn(self):
+        async def go():
+            o, log = make_resume(["What are you doing?", "Hello?"])
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            first = o.reply
+            await asyncio.sleep(0.05)                # the brain is working on the first part
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            self.assertIsNot(o.reply, first)
+            self.assertNotIn(first, o.replies)
+            self.assertEqual(o.reply.user_text, "What are you doing? Hello?")
+            await o.reply_task
+            self.assertEqual([t for t, _ in o.c.brain.calls], ["What are you doing?", "What are you doing? Hello?"])
+            self.assertTrue(o.reply.content_started)
+        asyncio.run(go())
+
+    def test_sound_during_final_transcript_holds_the_reply(self):
+        async def go():
+            o, log = make_resume(["What are you doing?", ""])
+            o._on_speech_start()
+            o.in_user_turn = False
+            label, gen = o.label, o.gen
+            o._on_speech_start()                     # noise starts before the final is back
+            await o._handle_turn(label, gen)
+            r = o.reply
+            self.assertIsNotNone(r)
+            self.assertIsNotNone(r.held)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)     # the noise had no words
+            await o.reply_task
+            self.assertTrue(r.content_started)
+            self.assertEqual(len(o.c.brain.calls), 1)
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     unittest.main()
