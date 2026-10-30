@@ -37,8 +37,30 @@ class TestChunker(unittest.TestCase):
         self.assertEqual(got, ["Sure,", "running them now.", "This might, maybe, take a while."])
 
     def test_long_first_clause_not_split(self):
-        got = chunk_all("There's a brain dump tool for voice prompts and more, plus a cache timer.")
-        self.assertEqual(got, ["There's a brain dump tool for voice prompts and more, plus a cache timer."])
+        got = chunk_all("There's a brain dump tool for voice prompts, plus a cache timer.")
+        self.assertEqual(got, ["There's a brain dump tool for voice prompts, plus a cache timer."])
+
+    def test_long_first_sentence_split_at_comma(self):
+        got = chunk_all("There's a brain dump tool for voice prompts and more, plus a cache timer.", stream=True)
+        self.assertEqual(got, ["There's a brain dump tool for voice prompts and more,", "plus a cache timer."])
+
+    def test_long_first_sentence_split_before_phrase(self):
+        # 2026-10-30 session, turn 13: this 20-word first sentence took 2.4 s from first text to first sound
+        t = ("I was looking through the plugin code and logs to check whether it opens the conversation "
+             "once it reaches listening. So far the log folder only holds a process ID.")
+        want = ["I was looking through the plugin code and logs",
+                "to check whether it opens the conversation once it reaches listening.",
+                "So far the log folder only holds a process ID."]
+        self.assertEqual(chunk_all(t), want)
+        self.assertEqual(chunk_all(t, stream=True), want)
+
+    def test_long_first_sentence_without_boundary_kept(self):
+        t = "Let me check the logs for the startup and listening states of the plugin now."
+        self.assertEqual(chunk_all(t), [t])
+
+    def test_only_first_sentence_is_split(self):
+        t = "Sure thing. I was looking through the plugin code and logs to check whether it opens."
+        self.assertEqual(chunk_all(t), ["Sure thing.", "I was looking through the plugin code and logs to check whether it opens."])
 
     def test_number_comma_not_split(self):
         self.assertEqual(chunk_all("About 1,000 tests ran."), ["About 1,000 tests ran."])

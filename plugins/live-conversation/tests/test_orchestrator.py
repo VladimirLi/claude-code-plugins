@@ -205,6 +205,43 @@ class TestEarlyFiller(unittest.TestCase):
         asyncio.run(go())
 
 
+class TestProbeWithoutFiller(unittest.TestCase):
+    def _make(self, tail, cls):
+        log = EventLog(Clock())
+        audio = FakeAudio(log)
+        ep = FakeEndpointer(tail)
+        ep.trace[-1]["class"] = cls
+        c = Components(endpointer=ep, stt=SlowSTT("What's going on?"), brain=FakeBrain(delay=0.0),
+                       tts=FakeTTS(0.0), bargein=Nop(), turntaking=TurnTaking({"fillers": False}))
+        return Orchestrator(audio, log, c, {}), log
+
+    def test_short_turn_starts_brain_on_probe_before_final(self):
+        # 2026-10-30 session, turn 13: fillers off, the final text came 280 ms after the turn end
+        # and the brain waited for it, though the probe already held "What's going on?"
+        async def go():
+            o, log = self._make("What's going on?", "yield")
+            o._on_speech_start()
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen, o._turn_probe())
+            await asyncio.sleep(0.05)                       # final text not back yet (0.3 s)
+            self.assertEqual(o.c.brain.calls[0][0], "What's going on?")
+            self.assertFalse([e for e in log.events if e.event == "final_transcript"])
+            await asyncio.sleep(0.3)
+            self.assertEqual([e.extra["text"] for e in log.events if e.event == "final_transcript"], ["What's going on?"])
+            await o.reply_task
+        asyncio.run(go())
+
+    def test_wordless_pause_waits_for_final(self):
+        async def go():
+            o, log = self._make("Thank you.", "none")
+            o._on_speech_start()
+            o.in_user_turn = False
+            self.assertIsNone(o._turn_probe())
+            await o._handle_turn(o.label, o.gen, o._turn_probe())
+            self.assertEqual([e.event for e in log.events if e.event == "final_transcript"], ["final_transcript"])
+        asyncio.run(go())
+
+
 class TestKeepalive(unittest.TestCase):
     def test_long_silence_in_reply_gets_a_holding_line(self):
         async def go():

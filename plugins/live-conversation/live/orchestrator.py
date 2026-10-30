@@ -233,8 +233,9 @@ class Orchestrator:
                     self.in_user_turn = False
                     self.log.emit("turn_end_detected", self.label, source=d.source)
                     self._log_endpoint()
+                    probe = self._turn_probe()
                     self._early_filler(self.label)
-                    self._spawn(self._handle_turn(self.label, self.gen))
+                    self._spawn(self._handle_turn(self.label, self.gen, probe))
         # let a reply in flight finish its bookkeeping
         await asyncio.sleep(0)
 
@@ -386,6 +387,16 @@ class Orchestrator:
         e["task"] = self._spawn(self._play_early(e))
         self.early = e
 
+    def _turn_probe(self) -> Optional[str]:
+        """At a turn end: the endpointer's on-device text of the pause that ended the turn, if it
+        holds words and the whole utterance. A pause with no words (noise, a cough) gives None, so
+        the brain never starts on a probe hallucination; such a turn waits for the final text."""
+        tr = getattr(self.c.endpointer, "trace", None)
+        x = tr[-1] if tr and isinstance(tr[-1], dict) else {}
+        if x.get("class") in (None, "none") or not (x.get("text") or "").strip():
+            return None
+        return self._probe_covers(x["text"])
+
     def _probe_covers(self, tail: str) -> Optional[str]:
         """The probe text, if it holds the whole utterance (the probe sends the last 3.5 s)."""
         if not tail.strip() or self.clock.ms - self.turn_start_ms > float(self.ocfg["probe_window_ms"]):
@@ -438,12 +449,17 @@ class Orchestrator:
         a.filler = early["filler"] if a.kind == "respond" else None
         return a, early.get("source", "early")
 
-    async def _handle_turn(self, label: Optional[int], gen: int) -> None:
+    async def _handle_turn(self, label: Optional[int], gen: int, probe: Optional[str] = None) -> None:
         e = self.early if self.early is not None and self.early["label"] == label else None
-        if e is not None and e.get("probe") and self.ocfg["brain_on_probe"] and not e["flushed"]:
+        if e is not None and not e["flushed"]:
+            probe = e.get("probe") or probe
+        elif e is not None:
+            probe = None
+        if probe and self.ocfg["brain_on_probe"]:
             # Short turn: the endpointer's on-device transcript already holds all of it. The brain
-            # starts on it now; the final transcript (Azure, ~300 ms later) is logged when it lands.
-            text = e["probe"]
+            # starts on it now, with or without a filler; the final transcript (Azure, 100-350 ms
+            # later on the 2026-10-30 session) is logged when it lands.
+            text = probe
             full = (self.carry + " " + text).strip() if self.carry else text
             self._spawn(self._final_later(label, self.carry, full))
         else:

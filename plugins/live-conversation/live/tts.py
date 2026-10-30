@@ -71,6 +71,13 @@ _SENT = re.compile(r"(.+?[.!?…]+[\"')\]]*)(\s+|$)", re.S)
 _CLAUSE = re.compile(r"(.+?(?:[,;:]|\s[-–—]))(\s+)", re.S)
 
 
+# Words that open a new phrase, where a speaker can pause inside a long sentence.
+# ("and" / "or" are left out: they mostly join two nouns, "the code and logs".)
+_PHRASE_START = {"to", "because", "so", "which", "that", "when", "while", "if", "but", "since", "once",
+                 "whether", "until", "where", "after", "before"}
+_WORD = re.compile(r"\S+")
+
+
 class Chunker:
     """Splits streamed reply text into pieces to synthesize.
 
@@ -79,13 +86,41 @@ class Chunker:
       "Two hundred and forty tests passed,") so the voice starts sooner. Only a
       short clause (<= first_clause_max_words) is split off, since that is where a
       speaker pauses anyway.
+    - A long first sentence (long_first_words or more, still open) is split at a phrase
+      boundary: a comma within the first long_split_max_words words, else just before
+      a phrase-opening word ("to", "because", "which" ...) after 5-10 words. The first
+      sound waits for the whole first piece to be synthesized, and Kokoro takes about
+      0.77 s for a 20-word sentence against 0.35 s for 9 words (measured 2026-10-30),
+      so on the 2026-10-30 session "I was looking through the plugin code and logs to
+      check whether ..." took 2.4 s from first text to first sound.
     """
 
-    def __init__(self, min_chars: int = 2, first_clause_max_words: int = 6) -> None:
+    def __init__(self, min_chars: int = 2, first_clause_max_words: int = 6,
+                 long_first_words: int = 12, long_split_min_words: int = 5, long_split_max_words: int = 10) -> None:
         self.buf = ""
         self.min_chars = min_chars
         self.first_clause_max_words = first_clause_max_words
+        self.long_first_words = long_first_words
+        self.long_split_min_words = long_split_min_words
+        self.long_split_max_words = long_split_max_words
         self.emitted = 0
+
+    def _long_first_split(self, m) -> int:
+        """End index in buf of the first piece of a long first sentence, or 0. m: the _SENT match
+        of the first sentence if its end is in buf (None while it is still open)."""
+        sent = m.group(1) if m else self.buf
+        words = list(_WORD.finditer(sent))
+        complete = m is not None or self.buf[-1:].isspace()     # else the last word may still grow
+        if len(words) < self.long_first_words or not complete and len(words) <= self.long_first_words:
+            return 0
+        c = _CLAUSE.match(sent)
+        if c and len(c.group(1).split()) <= self.long_split_max_words:
+            return c.end(1)
+        for i in range(self.long_split_min_words, self.long_split_max_words + 1):
+            w = words[i].group().lower().strip("\"'(")
+            if w in _PHRASE_START:
+                return words[i - 1].end()
+        return 0
 
     def _emit(self, piece: str, out: list) -> None:
         piece = piece.strip()
@@ -105,6 +140,12 @@ class Chunker:
                         1 <= len(c.group(1).split()) <= self.first_clause_max_words:
                     self.buf = self.buf[c.end():]
                     self._emit(c.group(1), out)
+                    continue
+            if self.emitted == 0 and not out and (sent_ok or not m):
+                k = self._long_first_split(m if sent_ok else None)
+                if k:
+                    piece, self.buf = self.buf[:k], self.buf[k:].lstrip()
+                    self._emit(piece, out)
                     continue
             if sent_ok:
                 self.buf = self.buf[m.end():]
