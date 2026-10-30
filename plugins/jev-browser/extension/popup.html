@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>jev-browser</title>
+<style>
+  body { font: 13px system-ui, sans-serif; width: 300px; margin: 12px; color: #222; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #eee; background: #222; } input { background: #333; color: #eee; } }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  input { width: 100%; box-sizing: border-box; padding: 6px; font: 12px ui-monospace, monospace; }
+  button { margin-top: 6px; padding: 5px 10px; }
+  #status { margin: 8px 0; }
+  .muted { opacity: .7; font-size: 12px; }
+</style></head>
+<body>
+  <h1>jev-browser</h1>
+  <div id="status">…</div>
+  <label for="code" class="muted">Pairing code (run <code>jevb pair</code> in a terminal):</label>
+  <input id="code" placeholder="jevb:47652:…" autocomplete="off" spellcheck="false">
+  <button id="pair">Pair</button>
+  <p class="muted">Only tabs the daemon opens are driven. Chrome shows "is debugging this browser" while it works.</p>
+  <script src="popup.js"></script>
+</body></html>

@@ -16,8 +16,16 @@ export const CHROME = process.env.JEVB_CHROME || "/Applications/Google Chrome.ap
 // launching the dedicated one. Needs chrome://inspect/#remote-debugging switched on there.
 export const ATTACH = /^(1|true)$/i.test(process.env.JEVB_ATTACH || "");
 export const USER_CHROME = process.env.JEVB_USER_DATA_DIR || join(homedir(), "Library", "Application Support", "Google", "Chrome");
+// Extension mode: drive tabs through the jev-browser extension (chrome.debugger), connected to
+// the daemon by a local WebSocket. JEVB_EXT_TEST=1 also launches a dedicated headless test Chrome
+// that loads the unpacked extension (for the benchmark), instead of waiting for your Chrome.
+export const EXT = /^(1|true)$/i.test(process.env.JEVB_EXT || "") && !ATTACH;
+export const EXT_TEST = EXT && /^(1|true)$/i.test(process.env.JEVB_EXT_TEST || "");
+// fixed by the "key" in extension/manifest.json (an unpacked copy gets the same id anywhere)
+export const EXT_ID = process.env.JEVB_EXT_ID || "dpehlmjpcfhpahnjfjldooeincglhojn";
+export const EXT_PORT = Number(process.env.JEVB_EXT_PORT) || 47652;
 // One daemon per mode, so the dedicated Chrome and your own Chrome never share a socket.
-export const SOCKET = join(HOME, ATTACH ? "daemon-attach.sock" : "daemon.sock");
+export const SOCKET = join(HOME, ATTACH ? "daemon-attach.sock" : EXT_TEST ? "daemon-ext-test.sock" : EXT ? "daemon-ext.sock" : "daemon.sock");
 
 // Jev is served by TypeSafe and by OpenRouter (same request). A key is only ever sent to the
 // host of the provider it belongs to.

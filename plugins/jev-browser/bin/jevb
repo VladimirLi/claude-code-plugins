@@ -4,7 +4,8 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { Client } from "../src/client.mjs";
-import { SHOTS } from "../src/paths.mjs";
+import { SHOTS, EXT } from "../src/paths.mjs";
+import { pairingCode, EXT_ORIGIN } from "../src/cdp.mjs";
 
 const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SESSION or "default"; one tab per session)
 
@@ -24,6 +25,7 @@ const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SE
   eval <js function or expression>             bench only: runs JS in the session's tab, prints JSON
   close                                        close this session's tab
   sessions | status | stop                     list sessions · daemon status · stop daemon and Chrome
+  pair                                         print the code to paste into the jev-browser extension (JEVB_EXT=1)
   --fresh                                      when this call creates the session: give it its own empty
                                                browser context (no profile cookies/storage; gone on close)
   --json                                       print the raw result object`;
@@ -80,6 +82,11 @@ function parseAct() {
   }
 }
 
+if (cmd === "pair") {
+  console.log(pairingCode());
+  console.error(`Paste it into the jev-browser extension (toolbar icon). Only ${EXT_ORIGIN} can use it.${EXT ? "" : " Set JEVB_EXT=1 (or \"Use the extension\" in /plugin) for the daemon to use the extension."}`);
+  process.exit(0);
+}
 const client = new Client();
 let op = cmd, args = {};
 switch (cmd) {
