@@ -67,9 +67,12 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(classify(normalize("Mm-hmm.")), "continue")
 
 
+ON = {"fillers": True}  # fillers are off by default; these tests cover the feature itself
+
+
 class TestFillers(unittest.TestCase):
     def test_no_filler_repeats_in_a_session(self):
-        tt = TurnTaking()
+        tt = TurnTaking(ON)
         got = [tt.decide(TurnContext(t)).filler for t in SCENARIO_TURNS * 3]
         said = [f for f in got if f]
         self.assertEqual(len(said), len(set(said)))
@@ -92,33 +95,33 @@ class TestFillers(unittest.TestCase):
                 self.assertEqual(len(words), len(set(words)), text)
 
     def test_parts_not_reused_until_needed(self):
-        tt = TurnTaking()
+        tt = TurnTaking(ON)
         fs = [tt.decide(TurnContext(t)).filler for t in SCENARIO_TURNS[:3]]
         firsts = [f.split(",")[0] for f in fs]
         self.assertEqual(len(firsts), len(set(firsts)), fs)
 
     def test_fillers_vary_across_sessions(self):
         # The first filler of each scenario must not be the same canned text everywhere.
-        firsts = {TurnTaking().decide(TurnContext(t)).filler for t in SCENARIO_TURNS}
+        firsts = {TurnTaking(ON).decide(TurnContext(t)).filler for t in SCENARIO_TURNS}
         self.assertGreaterEqual(len(firsts), 6)
 
     def test_filler_fits_the_wait(self):
-        tt = TurnTaking({"filler_lead_ms": 150, "expected_content_ms": 1350})
+        tt = TurnTaking({**ON, "filler_lead_ms": 150, "expected_content_ms": 1350})
         f = tt.decide(TurnContext("How do I undo my last commit?")).filler
         self.assertLess(abs(estimate_ms(f) - 1200), 400)
 
     def test_longer_filler_after_interruption(self):
-        a = TurnTaking().decide(TurnContext("Actually, just give me the short version.")).filler
-        b = TurnTaking().decide(TurnContext("Give me the short version.")).filler
+        a = TurnTaking(ON).decide(TurnContext("Actually, just give me the short version.")).filler
+        b = TurnTaking(ON).decide(TurnContext("Give me the short version.")).filler
         self.assertGreater(estimate_ms(a), estimate_ms(b))
 
     def test_no_filler_when_fast(self):
-        tt = TurnTaking({"filler_lead_ms": 300, "expected_content_ms": 700})
+        tt = TurnTaking({**ON, "filler_lead_ms": 300, "expected_content_ms": 700})
         self.assertIsNone(tt.decide(TurnContext("How do I undo my last commit?")).filler)
         self.assertIsNone(TurnTaking({"fillers": False}).decide(TurnContext("How?")).filler)
 
     def test_observe_recalibrates(self):
-        tt = TurnTaking({"filler_lead_ms": 300, "expected_content_ms": 700, "learn_rate": 1.0})
+        tt = TurnTaking({**ON, "filler_lead_ms": 300, "expected_content_ms": 700, "learn_rate": 1.0})
         self.assertIsNone(tt.decide(TurnContext("How do I undo my last commit?")).filler)
         tt.observe_content_latency(2200)
         self.assertIsNotNone(tt.decide(TurnContext("What is a rebase?")).filler)

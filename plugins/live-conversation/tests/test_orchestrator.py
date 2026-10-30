@@ -95,7 +95,7 @@ def make(text="Why is the sky blue?", brain_delay=0.2, tts_delay=0.05):
     log = EventLog(Clock())
     audio = FakeAudio(log)
     c = Components(endpointer=Nop(), stt=FakeSTT(text), brain=FakeBrain(delay=brain_delay),
-                   tts=FakeTTS(tts_delay), bargein=Nop(), turntaking=TurnTaking())
+                   tts=FakeTTS(tts_delay), bargein=Nop(), turntaking=TurnTaking({"fillers": True}))
     return Orchestrator(audio, log, c, {}), log
 
 

@@ -19,7 +19,7 @@ Policy (v1):
   floor), and backchannels ("mm-hmm", "yeah", "right") while the assistant is
   still speaking, so the reply goes on instead of restarting.
 - Respond to everything else.
-- Filler: a turn-initial acknowledgement ("Oh okay, got it, so,") that fills
+- Filler (off by default, cfg "fillers"): a turn-initial acknowledgement ("Oh okay, got it, so,") that fills
   the wait until the brain's first sentence is audible, the way people (and
   the reference voice model, "Ah, good follow-up!") open a turn. It is spoken
   only when that wait is long (`expected_content_ms - filler_lead_ms >=
@@ -61,7 +61,8 @@ class Action:
 
 
 DEFAULTS = {
-    "fillers": True,
+    # Off: canned openers ("Oh, so, got it,", "Yeah, so basically,") sounded unnatural in live use.
+    "fillers": False,
     # ms from decide() to the first audible filler sample (TTS start-up for a short text).
     "filler_lead_ms": 150.0,
     # ms from decide() to the first audible sample of the brain's reply, normal turn.

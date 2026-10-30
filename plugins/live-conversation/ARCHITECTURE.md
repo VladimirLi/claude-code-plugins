@@ -128,6 +128,10 @@ tt.decide(TurnContext(transcript, assistant_was_speaking, last_reply)) -> Action
 tt.on_user_resumed(ctx) -> "merge" | "new"
 ```
 
+Known problem (user feedback, 2026-10-30): replies keep opening with filler such as "Oh, so,",
+"Got it," or "Yeah, so basically,". It sounds unnatural, not like a person on a call. Fixed: the
+canned fillers are off by default (cfg `fillers`), and the brain prompt says to start with the answer.
+
 ### orchestrator
 
 ```python
