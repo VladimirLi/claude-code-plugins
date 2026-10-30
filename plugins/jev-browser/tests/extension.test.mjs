@@ -108,100 +108,123 @@ test("the manifest key gives the extension id the daemon checks", () => {
 
 // sw.js against a stub chrome.*: what a --fresh session gets from the extension
 async function loadSw({ incognito = true, pairJson = null } = {}) {
-  const windows = new Map(); let nextId = 1; const cleared = [];
-  const listener = () => ({ addListener() {} });
+  const windows = new Map(); let nextId = 1; const cmds = [], committed = [];
+  const listener = (into) => ({ addListener(f) { into?.push(f); } });
+  const allTabs = () => [...windows.values()].flatMap((w) => w.tabs);
   globalThis.chrome = {
     extension: { isAllowedIncognitoAccess: async () => incognito },
     windows: {
-      create: async (o) => { const id = nextId++, tab = { id: 100 + id, windowId: id }; windows.set(id, { id, incognito: !!o.incognito, tabs: [tab] }); return windows.get(id); },
+      create: async (o) => { const id = nextId++, tab = { id: 100 + id, windowId: id, incognito: !!o.incognito }; windows.set(id, { id, incognito: !!o.incognito, state: o.state, tabs: [tab] }); return windows.get(id); },
       getAll: async () => [...windows.values()],
       remove: async (id) => { windows.delete(id); },
     },
     tabs: {
-      query: async ({ windowId } = {}) => (windowId == null ? [...windows.values()].flatMap((w) => w.tabs) : windows.get(windowId)?.tabs ?? []),
+      get: async (tabId) => { const t = allTabs().find((x) => x.id === tabId); if (!t) throw new Error("no tab"); return t; },
+      query: async ({ windowId } = {}) => (windowId == null ? allTabs() : windows.get(windowId)?.tabs ?? []),
       remove: async (tabId) => { for (const [id, w] of windows) if (w.tabs.some((t) => t.id === tabId)) windows.delete(id); },
       onRemoved: listener(),
     },
-    debugger: { getTargets: async () => [...windows.values()].flatMap((w) => w.tabs.map((t) => ({ id: `T${t.id}`, tabId: t.id }))), onEvent: listener(), onDetach: listener(), attach: async () => {}, detach: async () => {} },
-    webNavigation: { onCreatedNavigationTarget: listener() },
+    debugger: {
+      getTargets: async () => allTabs().map((t) => ({ id: `T${t.id}`, tabId: t.id })), onEvent: listener(), onDetach: listener(),
+      attach: async () => {}, detach: async () => {},
+      sendCommand: async (target, method, params) => { cmds.push({ tabId: target.tabId, method, params }); return {}; },
+    },
+    webNavigation: { onCreatedNavigationTarget: listener(), onCommitted: listener(committed) },
     storage: { local: { get: async () => ({}), set: async () => {} } },
     runtime: { getURL: (p) => `chrome-extension://x/${p}`, onMessage: listener(), onStartup: listener(), onInstalled: listener(), getManifest: () => ({ version: "0" }) },
     alarms: { create() {}, onAlarm: listener() },
-    browsingData: { remove: async (range, types) => { cleared.push({ range, types }); } },
   };
   // no pair.json: the worker stays unconnected (a test install's pair.json is given as pairJson)
   globalThis.fetch = async () => (pairJson ? { ok: true, json: async () => pairJson } : { ok: false });
   globalThis.WebSocket = class { constructor() { this.readyState = 0; } close() {} };
   const sw = await import(`../extension/sw.js?${Math.random()}`);
   await new Promise((r) => setTimeout(r, 0));   // the worker reads its pairing at load
-  return { sw, windows, cleared, incognitoWindows: () => [...windows.values()].filter((w) => w.incognito).length };
+  const navigate = (targetId, url) => committed.forEach((f) => f({ tabId: Number(targetId.slice(1)), frameId: 0, url }));
+  const clears = () => cmds.filter((c) => c.method === "Network.clearBrowserCookies").length;
+  return { sw, windows, cmds, clears, navigate, incognitoWindows: () => [...windows.values()].filter((w) => w.incognito).length };
 }
 
-test("--fresh in the extension: its own incognito window, closed with the session; refused without incognito access", async () => {
+test("--fresh: its own incognito window, joined to a kept incognito profile; refused without incognito access", async () => {
   const { sw, windows, incognitoWindows } = await loadSw();
   const send = (method, params = {}) => sw.handle({ id: 1, method, params });
   const a = await send("Target.createBrowserContext");
   assert.match(a.browserContextId, /^incognito-/);
+  assert.equal(a.isolate, "incognito");
   assert.equal(a.warning, undefined);
-  const ta = await send("Target.createTarget", { url: "about:blank", browserContextId: a.browserContextId });
-  assert.equal(ta.warning, undefined);
+  // the keeper: one blank, minimized incognito window that holds the incognito profile open
   assert.equal(incognitoWindows(), 1);
+  assert.equal([...windows.values()][0].state, "minimized");
+  const ta = await send("Target.createTarget", { url: "about:blank", browserContextId: a.browserContextId });
+  assert.equal(incognitoWindows(), 2);
   // a session that is not fresh: a normal window
   await send("Target.createTarget", { url: "about:blank" });
   assert.equal([...windows.values()].filter((w) => !w.incognito).length, 1);
-  // a second fresh session while the first is open shares the incognito profile: it is said
-  const b = await send("Target.createBrowserContext");
-  assert.match(b.warning, /shares the incognito profile/);
-  await send("Target.disposeBrowserContext", { browserContextId: b.browserContextId });
-  // dispose closes the session's incognito window; the next fresh session starts alone
+  // the session's window closes with it; the keeper stays, so the next session needs no new profile
+  await send("Target.closeTarget", { targetId: ta.targetId });
   await send("Target.disposeBrowserContext", { browserContextId: a.browserContextId });
-  assert.equal(incognitoWindows(), 0);
-  const c = await send("Target.createBrowserContext");
-  assert.equal(c.warning, undefined);
+  assert.equal(incognitoWindows(), 1);
+  await send("Target.createBrowserContext");
+  assert.equal(incognitoWindows(), 1);
   await assert.rejects(send("Target.createTarget", { browserContextId: "incognito-999" }), /unknown browser context/);
+  // the daemon stops: the keeper goes too
+  await send("Browser.close");
+  assert.equal(incognitoWindows(), 0);
 
   const { sw: noInc } = await loadSw({ incognito: false });
   await assert.rejects(noInc.handle({ id: 1, method: "Target.createBrowserContext", params: {} }), /Allow in Incognito/);
 });
 
-test("--fresh in the test Chrome: a normal window, cookies and storage cleared (HTTP cache kept) at start and close", async () => {
-  const { sw, windows, cleared, incognitoWindows } = await loadSw({ incognito: false, pairJson: { port: 1, token: "x".repeat(24), isolate: "clear" } });
+test("--fresh: closing a session clears the incognito cookies and the storage of every origin it visited (HTTP cache kept)", async () => {
+  const { sw, cmds, clears, navigate } = await loadSw({ pairJson: { port: 1, token: "x".repeat(24) } });
   const send = (method, params = {}) => sw.handle({ id: 1, method, params });
   const a = await send("Target.createBrowserContext");
-  assert.equal(a.isolate, "clear");
-  assert.equal(a.warning, undefined);
-  assert.equal(cleared.length, 1);                    // the profile may hold anything at first: cleared
-  assert.equal(cleared[0].range.since, 0);
-  assert.equal(cleared[0].types.cache, undefined);    // the HTTP cache stays warm
-  for (const k of ["cookies", "localStorage", "indexedDB", "serviceWorkers", "cacheStorage"]) assert.equal(cleared[0].types[k], true);
+  assert.equal(clears(), 0);                          // nothing ran in the incognito profile yet
   const ta = await send("Target.createTarget", { url: "about:blank", browserContextId: a.browserContextId });
-  assert.match(ta.targetId, /^T/);
-  assert.equal(incognitoWindows(), 0);
-  assert.equal(windows.size, 1);
-  // closing the session closes its window and clears again
+  navigate(ta.targetId, "https://shop.example/login");
+  navigate(ta.targetId, "https://cdn.example/frame");
+  navigate(ta.targetId, "about:blank");
   await send("Target.closeTarget", { targetId: ta.targetId });
-  await send("Target.disposeBrowserContext", { browserContextId: a.browserContextId });
-  assert.equal(windows.size, 0);
-  assert.equal(cleared.length, 2);
-  // the next fresh session starts clean already: no second clear on the open path
+  assert.deepEqual(await send("Target.disposeBrowserContext", { browserContextId: a.browserContextId }), {});
+  assert.equal(clears(), 1);
+  const storage = cmds.filter((c) => c.method === "Storage.clearDataForOrigin");
+  assert.deepEqual(storage.map((c) => c.params.origin).sort(), ["https://cdn.example", "https://shop.example"]);
+  assert.ok(storage.every((c) => c.params.storageTypes === "all"));
+  // on the keeper tab, never on a tab of your own; no HTTP-cache clear anywhere
+  const keeperTab = cmds[0].tabId;
+  assert.ok(cmds.every((c) => c.tabId === keeperTab));
+  assert.ok(!cmds.some((c) => /clearBrowserCache/.test(c.method)));
+  // the next fresh session starts clean already: no clear on the open path
   const b = await send("Target.createBrowserContext");
-  assert.equal(cleared.length, 2);
-  await send("Target.createTarget", { url: "about:blank", browserContextId: b.browserContextId });
-  // a fresh session while another session is open: nothing is cleared under it, and it is said
+  assert.equal(clears(), 1);
+  const tb = await send("Target.createTarget", { url: "about:blank", browserContextId: b.browserContextId });
+  navigate(tb.targetId, "https://shop.example/");
+  // a fresh session while another is open: nothing is cleared under it, and it is said
   const c = await send("Target.createBrowserContext");
-  assert.match(c.warning, /other sessions are open/);
-  await send("Target.disposeBrowserContext", { browserContextId: c.browserContextId });
-  assert.equal(cleared.length, 2);                    // b still open
+  assert.match(c.warning, /another fresh session is open/);
+  const d = await send("Target.disposeBrowserContext", { browserContextId: c.browserContextId });
+  assert.match(d.warning, /another fresh session is open/);
+  assert.equal(clears(), 1);
+  // the last one closes: cleared
+  await send("Target.disposeBrowserContext", { browserContextId: b.browserContextId });
+  assert.equal(clears(), 2);
 });
 
-test("--fresh in your Chrome never clears your profile", async () => {
-  const { sw, cleared } = await loadSw();
+test("--fresh never clears while you have incognito tabs of your own", async () => {
+  const { sw, windows, clears, navigate } = await loadSw();
   const send = (method, params = {}) => sw.handle({ id: 1, method, params });
   const a = await send("Target.createBrowserContext");
-  assert.equal(a.isolate, "incognito");
-  await send("Target.createTarget", { url: "about:blank", browserContextId: a.browserContextId });
-  await send("Target.disposeBrowserContext", { browserContextId: a.browserContextId });
-  assert.equal(cleared.length, 0);
+  const ta = await send("Target.createTarget", { url: "about:blank", browserContextId: a.browserContextId });
+  navigate(ta.targetId, "https://mail.example/");
+  windows.set(99, { id: 99, incognito: true, tabs: [{ id: 999, windowId: 99, incognito: true }] });   // yours
+  const r = await send("Target.disposeBrowserContext", { browserContextId: a.browserContextId });
+  assert.match(r.warning, /incognito tab\(s\) of your own/);
+  assert.equal(clears(), 0);
+  // it stays owed: the next fresh session says it shares, then clears once yours are gone
+  const b = await send("Target.createBrowserContext");
+  assert.match(b.warning, /shares cookies and storage/);
+  windows.delete(99);
+  await send("Target.disposeBrowserContext", { browserContextId: b.browserContextId });
+  assert.equal(clears(), 1);
 });
 
 // chrome.debugger hands back results with sorted keys; Jev reads key order, so by-value evaluates

@@ -160,10 +160,10 @@ export class ExtCDP extends CDP {
         return super.send(method, { ...params, expression: "(() => { const v = globalThis.__jevbRaw; delete globalThis.__jevbRaw; return v; })()", awaitPromise: false }, sessionId, timeout);
       }
     }
-    if (method === "Target.createBrowserContext" || (method === "Target.createTarget" && params.browserContextId)) {
+    if (method === "Target.createBrowserContext" || method === "Target.disposeBrowserContext" || (method === "Target.createTarget" && params.browserContextId)) {
       // a fresh session: the extension gives it empty cookies and storage, or refuses
       const r = await super.send(method, params, sessionId, timeout).catch((e) => { extLog(`fresh session refused: ${e.message}`); throw e; });
-      if (r.browserContextId) extLog(`fresh session context ${r.browserContextId} (${r.isolate === "clear" ? "normal window, cookies and storage cleared, HTTP cache kept" : "incognito window, empty cookies and storage"})`);
+      if (r.browserContextId) extLog(`fresh session context ${r.browserContextId} (incognito window, cookies and storage cleared, incognito HTTP cache kept)`);
       if (r.warning) extLog(`warning: fresh session ${params.browserContextId ?? r.browserContextId ?? ""} ${r.warning}`);
       return r;
     }
@@ -234,14 +234,12 @@ export async function connectExtension() {
 async function launchTestChrome(h) {
   if (!existsSync(CHROME)) throw new Error(`Chrome not found at ${CHROME} (set JEVB_CHROME)`);
   const profile = join(HOME, "ext-test-profile"), dir = join(HOME, "ext-test", "extension");
-  // a clean profile each launch (each --fresh session starts with its cookies and storage cleared), and a copy of the extension
-  // that carries this launch's pairing
+  // a clean profile each launch, and a copy of the extension that carries this launch's pairing
   rmSync(profile, { recursive: true, force: true }); mkdirSync(profile, { recursive: true, mode: 0o700 });
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true, mode: 0o700 });
   cpSync(join(PLUGIN_ROOT, "extension"), dir, { recursive: true });
-  // isolate "clear": this profile is throwaway, so a --fresh session clears its cookies and storage
-  // (keeping the HTTP cache warm) instead of opening an incognito window
-  writeFileSync(join(dir, "pair.json"), JSON.stringify({ port: h.port, token: h.token, isolate: "clear" }), { mode: 0o600 });
+  // a --fresh session gets an incognito window here too, exactly as in your Chrome
+  writeFileSync(join(dir, "pair.json"), JSON.stringify({ port: h.port, token: h.token }), { mode: 0o600 });
   const args = [
     `--user-data-dir=${profile}`, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging",
     "--no-first-run", "--no-default-browser-check", "--use-mock-keychain", "--password-store=basic",
@@ -266,12 +264,12 @@ async function launchTestChrome(h) {
     proc.once("exit", (code) => rej(new Error(`Chrome exited at start (code ${code})`)));
     setTimeout(() => rej(new Error("Chrome did not answer on the pipe within 30 s")), 30_000);
   });
-  toChrome.write(JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: dir } }) + "\0");
+  toChrome.write(JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: dir, enableInIncognito: true } }) + "\0");
   let r;
   try { r = await reply; } catch (e) { proc.kill(); throw e; }
   // keep the pipe open (closing it ends Chrome) but never send on it again
   fromChrome.removeAllListeners("data"); fromChrome.on("data", () => {});
   if (r.id !== EXT_ID) extLog(`loaded extension id ${r.id}, expected ${EXT_ID}`);
-  extLog(`test Chrome ${proc.pid}: pipe sent 1 command (Extensions.loadUnpacked ${r.id}); all others go over the extension`);
+  extLog(`test Chrome ${proc.pid}: pipe sent 1 command (Extensions.loadUnpacked ${r.id}, incognito allowed); all others go over the extension`);
   return proc;
 }
