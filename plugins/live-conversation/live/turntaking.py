@@ -91,6 +91,14 @@ _BACKCHANNELS = {
     "ok ok", "yeah okay", "okay yeah", "oh right", "ah right", "i see i see", "aha",
 }
 
+# What Whisper-family models write for noise, breath or silence. A final that is only one of
+# these is not words (FLOOR-SPEC.md, "Words"). Compared after turntaking.normalize.
+STT_HALLUCINATIONS = {
+    "you", "thank you", "thanks", "thank you very much", "thanks for watching", "thank you for watching",
+    "thank you so much for watching", "we'll see you next time", "see you next time", "bye", "bye bye",
+    "please subscribe", "subscribe", "like and subscribe", "so", "the", "i", "okay thank you",
+}
+
 # Fillers are composed from two hand-written parts, both fitted to the kind of turn:
 #   interjection + body                 "Ah," + " got it, so,"    "Hmm," + " the thing is,"
 # Composition gives many distinct texts (no canned repeats), and lets the length fit the wait.

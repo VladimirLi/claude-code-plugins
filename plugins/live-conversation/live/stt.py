@@ -99,13 +99,9 @@ def echoes_prompt(text: str, prompt: Optional[str]) -> bool:
     return p[len(p) - len(w):] == w and (len(w) >= 3 or len(w) == len(p))
 
 
-# What Whisper-family models write for noise, breath or silence. A final that is only one of
-# these is not words (FLOOR-SPEC.md, "Words"). Compared after turntaking.normalize.
-STT_HALLUCINATIONS = {
-    "you", "thank you", "thanks", "thank you very much", "thanks for watching", "thank you for watching",
-    "thank you so much for watching", "we'll see you next time", "see you next time", "bye", "bye bye",
-    "please subscribe", "subscribe", "like and subscribe", "so", "the", "i", "okay thank you",
-}
+# What Whisper-family models write for noise, breath or silence (FLOOR-SPEC.md, "Words"). The set
+# lives in turntaking.py with the other word lists, so the pure floor controller can use it.
+from .turntaking import STT_HALLUCINATIONS  # noqa: E402,F401
 
 
 def join_text(parts: list[str]) -> str:

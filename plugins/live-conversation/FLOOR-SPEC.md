@@ -220,6 +220,7 @@ The word boundary is estimated from the piece's length, because the TTS gives no
      When the pause set is empty, `play`. Nothing is asked again.
    - **Interim words but a final with no words** (an STT dropout; session issue 4): use the
      segment's last interim text as its final, and go on below.
+     *Note (step 3): this test runs first, before "No words"; in the order above it could never apply.*
    - **Words, and g is part of the current reply's question** (it is in `reply.segs`: it started
      before `start_reply`, including segments carried in at an interrupt): **join**, whatever its
      over-heard flag.
