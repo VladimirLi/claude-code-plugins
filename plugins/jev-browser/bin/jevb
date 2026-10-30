@@ -5,7 +5,6 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { Client } from "../src/client.mjs";
 import { SHOTS, EXT } from "../src/paths.mjs";
-import { pairingCode, EXT_ORIGIN } from "../src/cdp.mjs";
 
 const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SESSION or "default"; one tab per session)
 
@@ -83,6 +82,8 @@ function parseAct() {
 }
 
 if (cmd === "pair") {
+  // loaded only here: the other commands never pay for the WebSocket server's imports
+  const { pairingCode, EXT_ORIGIN } = await import("../src/cdp.mjs");
   console.log(pairingCode());
   console.error(`Paste it into the jev-browser extension (toolbar icon). Only ${EXT_ORIGIN} can use it.${EXT ? "" : " Set JEVB_EXT=1 (or \"Use the extension\" in /plugin) for the daemon to use the extension."}`);
   process.exit(0);

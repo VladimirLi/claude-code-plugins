@@ -130,15 +130,40 @@ export function pairing() {
 }
 export const pairingCode = (p = pairing()) => `jevb:${p.port}:${p.token}`;
 
+// Results that cross chrome.debugger come back with every object's keys sorted (Chrome turns
+// them into its own dictionaries). Jev reads key order (a page element is {i, tag, text, ...}),
+// so a by-value Runtime.evaluate travels as JSON text instead: the page stringifies, the daemon
+// parses, and the order is the page's. An expression that is not one (statements) goes as is.
+const AsyncFunction = (async () => {}).constructor;
+const RAW = "\u0000jevb-raw";
+export function orderedExpr(expression, awaitPromise) {
+  try { new AsyncFunction(`return (${expression}\n)`); } catch { return null; }
+  // JSON.stringify can throw (a cycle, a BigInt): then the value is kept for a plain by-value read
+  const out = `try { return JSON.stringify(v); } catch { globalThis.__jevbRaw = v; return ${JSON.stringify(RAW)}; }`;
+  return awaitPromise
+    ? `(async () => { const v = await (${expression}\n); ${out} })()`
+    : `(() => { const v = (${expression}\n); ${out} })()`;
+}
+const byValue = (v) => ({ type: v === null || Array.isArray(v) ? "object" : typeof v, ...(v === null ? { subtype: "null" } : Array.isArray(v) ? { subtype: "array" } : {}), value: v });
+
 // The extension's CDP: DOM.setFileInputFiles needs "Allow access to file URLs" for an extension,
 // so without it the file is handed to the page instead (read here, set through a DataTransfer).
 export class ExtCDP extends CDP {
   constructor(ws) { super(ws, "extension"); }
   async send(method, params = {}, sessionId, timeout) {
+    if (method === "Runtime.evaluate" && params.returnByValue && typeof params.expression === "string") {
+      const expression = orderedExpr(params.expression, params.awaitPromise);
+      if (expression) {
+        const r = await super.send(method, { ...params, expression }, sessionId, timeout);
+        if (r.exceptionDetails || r.result?.type !== "string") return r;   // a throw, or undefined
+        if (r.result.value !== RAW) return { ...r, result: byValue(JSON.parse(r.result.value)) };
+        return super.send(method, { ...params, expression: "(() => { const v = globalThis.__jevbRaw; delete globalThis.__jevbRaw; return v; })()", awaitPromise: false }, sessionId, timeout);
+      }
+    }
     if (method === "Target.createBrowserContext" || (method === "Target.createTarget" && params.browserContextId)) {
-      // a fresh session: the extension gives it its own incognito window, or refuses
+      // a fresh session: the extension gives it empty cookies and storage, or refuses
       const r = await super.send(method, params, sessionId, timeout).catch((e) => { extLog(`fresh session refused: ${e.message}`); throw e; });
-      if (r.browserContextId) extLog(`fresh session context ${r.browserContextId} (incognito window, empty cookies and storage)`);
+      if (r.browserContextId) extLog(`fresh session context ${r.browserContextId} (${r.isolate === "clear" ? "normal window, cookies and storage cleared, HTTP cache kept" : "incognito window, empty cookies and storage"})`);
       if (r.warning) extLog(`warning: fresh session ${params.browserContextId ?? r.browserContextId ?? ""} ${r.warning}`);
       return r;
     }
@@ -209,12 +234,14 @@ export async function connectExtension() {
 async function launchTestChrome(h) {
   if (!existsSync(CHROME)) throw new Error(`Chrome not found at ${CHROME} (set JEVB_CHROME)`);
   const profile = join(HOME, "ext-test-profile"), dir = join(HOME, "ext-test", "extension");
-  // a clean profile each launch (each --fresh session also gets its own incognito profile), and a copy of the extension
+  // a clean profile each launch (each --fresh session starts with its cookies and storage cleared), and a copy of the extension
   // that carries this launch's pairing
   rmSync(profile, { recursive: true, force: true }); mkdirSync(profile, { recursive: true, mode: 0o700 });
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true, mode: 0o700 });
   cpSync(join(PLUGIN_ROOT, "extension"), dir, { recursive: true });
-  writeFileSync(join(dir, "pair.json"), JSON.stringify({ port: h.port, token: h.token }), { mode: 0o600 });
+  // isolate "clear": this profile is throwaway, so a --fresh session clears its cookies and storage
+  // (keeping the HTTP cache warm) instead of opening an incognito window
+  writeFileSync(join(dir, "pair.json"), JSON.stringify({ port: h.port, token: h.token, isolate: "clear" }), { mode: 0o600 });
   const args = [
     `--user-data-dir=${profile}`, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging",
     "--no-first-run", "--no-default-browser-check", "--use-mock-keychain", "--password-store=basic",
@@ -239,13 +266,12 @@ async function launchTestChrome(h) {
     proc.once("exit", (code) => rej(new Error(`Chrome exited at start (code ${code})`)));
     setTimeout(() => rej(new Error("Chrome did not answer on the pipe within 30 s")), 30_000);
   });
-  // allowed in incognito, so that each --fresh session gets an empty incognito profile
-  toChrome.write(JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: dir, enableInIncognito: true } }) + "\0");
+  toChrome.write(JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: dir } }) + "\0");
   let r;
   try { r = await reply; } catch (e) { proc.kill(); throw e; }
   // keep the pipe open (closing it ends Chrome) but never send on it again
   fromChrome.removeAllListeners("data"); fromChrome.on("data", () => {});
   if (r.id !== EXT_ID) extLog(`loaded extension id ${r.id}, expected ${EXT_ID}`);
-  extLog(`test Chrome ${proc.pid}: pipe sent 1 command (Extensions.loadUnpacked ${r.id}, incognito allowed); all others go over the extension`);
+  extLog(`test Chrome ${proc.pid}: pipe sent 1 command (Extensions.loadUnpacked ${r.id}); all others go over the extension`);
   return proc;
 }
