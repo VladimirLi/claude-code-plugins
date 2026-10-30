@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(PLUGIN, "tests"))
 from live import tasks  # noqa: E402
 from live.brain import Brain  # noqa: E402
 from live.events import FRAME, Clock, EventLog  # noqa: E402
-from live.orchestrator import ANNOUNCE_RETRY_NOTE, Components, Orchestrator  # noqa: E402
+from live.orchestrator import ANNOUNCE_CARRY_NOTE, ANNOUNCE_RETRY_NOTE, Components, Orchestrator  # noqa: E402
 from live.turntaking import TurnTaking  # noqa: E402
 from test_orchestrator import FakeAudio, FakeBrain, FakeSTT, FakeTTS, Nop  # noqa: E402
 
@@ -163,6 +163,57 @@ class TestAnnounce(unittest.TestCase):
             spoken = [r for r in o.replies if r.announce and r.content_started]
             self.assertEqual(len(spoken), 1)                    # heard once
             self.assertFalse(spoken[0].interrupted)             # and completely
+        asyncio.run(go())
+
+    def test_cut_result_rides_on_the_next_reply_and_is_not_said_twice(self):
+        # replay of the bar: the cut result was told in the reply to "All right, let's see if this
+        # works better", then the retry told it a second time.
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 5 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o._on_speech_start()                                # the user talks before any audio
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)                # their turn: "hi"
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertEqual(len(prompts), 2)                   # no third, separate announcement
+            self.assertTrue(prompts[1].startswith(ANNOUNCE_CARRY_NOTE))
+            self.assertIn("[Task 5 finished.]", prompts[1])
+            self.assertTrue(prompts[1].endswith("hi"))
+            self.assertEqual(o.unheard, [])
+            self.assertEqual(len([e for e in log.events if e.event == "x_announce_delivered"]), 1)
+        asyncio.run(go())
+
+    def test_carrying_reply_cut_early_does_not_count_as_heard(self):
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 8 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o._on_speech_start()
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            o.c.brain.reply = "One two three four five six seven eight nine ten."
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            t.cancel()                                          # hold the clock: nothing of it plays
+            while not r.content_started:
+                await asyncio.sleep(0.005)
+            o._barge_in()
+            t = asyncio.ensure_future(ticking(audio))
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertEqual(len(prompts), 3)
+            self.assertTrue(prompts[2].startswith(ANNOUNCE_RETRY_NOTE))
         asyncio.run(go())
 
     def test_no_retry_once_content_was_heard(self):
