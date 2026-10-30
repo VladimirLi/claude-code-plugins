@@ -821,6 +821,64 @@ class TestReviewFindings(FloorCase):
         self.assertOneAnswer(sim)
 
 
+# -- echo (A/B 2026-10-30: ab-new-echo, ab-new-echo-spk) ----------------------------------------
+
+class TestEcho(FloorCase):
+    """The reply's own echo opens segments; the STT writes short, misheard fragments of what plays.
+    From the runs: "Shreds are cheaper." over "Threads are cheaper", "Thread reuse." over "A thread
+    reuses", "A full reload." over "a full rewrite"."""
+
+    PLAN = Plan(pieces=[("Threads are cheaper because they share memory.", 3000),
+                        ("A thread reuses the process's address space.", 3000)])
+
+    def _echo(self, cfg, interim, final):
+        sim = Sim(cfg, plans=self.PLAN)
+        ask(sim)                                               # piece 1 plays about 2220-5220
+        sim.say(2, 2600, 3400, final, interims=[(3300, interim)], truth="")
+        return sim.run()
+
+    def test_misheard_echo_fragment_on_speakers(self):
+        sim = self._echo({"speakers": True}, "Shreds are", "Shreds are cheaper.")
+        self.assertOneAnswer(sim)
+
+    def test_misheard_echo_fragment_with_echo_on_headphones(self):
+        sim = self._echo({}, "Shreds are", "Shreds are cheaper.")
+        self.assertOneAnswer(sim)
+
+    def test_echo_score_makes_any_text_echo(self):
+        # "A full reload." over "a full rewrite": no text rule catches it; the audio does
+        sim = Sim({"speakers": True}, plans=self.PLAN)
+        ask(sim)
+        sim.say(2, 2600, 3400, "A full reload.", interims=[(3300, "A full")], truth="", echo=0.9)
+        sim.run()
+        self.assertOneAnswer(sim)
+        self.assertEqual(sim.ops(F.Pause), [])
+
+    def test_real_words_over_the_echo_still_interrupt(self):
+        sim = Sim({"speakers": True}, plans=self.PLAN)
+        ask(sim)
+        sim.say(2, 2600, 3400, "stop show me the errors", interims=[(3300, "stop show")], echo=0.1)
+        sim.run()
+        self.assertEqual(sim.questions(), [Q1, "stop show me the errors"])
+
+    def test_echo_segment_leaves_the_pause_set_at_once(self):
+        sim = Sim(plans=self.PLAN)
+        ask(sim)
+        sim.detector(2600)                                     # the detector heard the echo
+        sim.say(2, 2640, 4000, "A full reload.", interims=[(3600, "A full")], truth="", echo=0.9,
+                final_ms=1500)
+        sim.run()
+        self.assertEqual([t for t, _ in sim.ops(F.Play)], [3600.0])   # not at the final (6100)
+        self.assertOneAnswer(sim)
+
+    def test_short_echo_fragment(self):
+        sim = Sim({"speakers": True}, plans=self.PLAN)
+        ask(sim)
+        sim.say(2, 5400, 6000, "Thread reuse.", interims=[(5900, "Thread reuse")], truth="")
+        sim.run()
+        self.assertOneAnswer(sim)
+
+
 # -- rewind, words, labels -------------------------------------------------------------------------
 
 class TestDetails(FloorCase):

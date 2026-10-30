@@ -77,17 +77,18 @@ class Sim:
         heapq.heappush(self.q, (float(t), next(self.seq), ev))
 
     def say(self, g: int, start: float, end: float, text: str = "", final_ms: Optional[float] = 300.0,
-            interims=(), hint=None, truth: Optional[str] = None, turn_end_ms: Optional[float] = None) -> str:
+            interims=(), hint=None, truth: Optional[str] = None, turn_end_ms: Optional[float] = None,
+            echo: Optional[float] = None) -> str:
         """One endpointer segment: speech_start at `start`, sound until `end`, turn_end 600 ms
         later (or at `turn_end_ms`), final `final_ms` after the turn_end (None: no final)."""
         utt = f"u{g}"
         self.at(start, F.SpeechStart(g, utt, hint))
         for ti, itext in interims:
-            self.at(ti, F.Interim(utt, itext))
+            self.at(ti, F.Interim(utt, itext, echo=echo))
         te = end + 600 if turn_end_ms is None else turn_end_ms
         self.at(te, F.TurnEnd(g, end))
         if final_ms is not None:
-            self.at(te + final_ms, F.Final(utt, text, "spec"))
+            self.at(te + final_ms, F.Final(utt, text, "spec", echo=echo))
         self.truth[utt] = text if truth is None else truth
         return utt
 

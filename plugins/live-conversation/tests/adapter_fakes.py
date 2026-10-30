@@ -60,10 +60,14 @@ class Script:
     cancel_ms: float = 0.0                           # brain.cancel: the next respond waits this long
     end_ms: float = 20000.0
 
-    def segment(self, start_ms, end_ms, text, final_ms=300.0, interims=(), how="spec"):
-        """`how`: "spec", or "timeout" (the final comes back empty), as the STT reports it."""
+    def segment(self, start_ms, end_ms, text, final_ms=300.0, interims=(), how="spec", voice=None):
+        """`how`: "spec", or "timeout" (the final comes back empty), as the STT reports it.
+        `text` (and an interim's) may be a callable, read when the STT answers (echo text depends on
+        what played). `voice`: the user makes sound (default: when there is text); an echo segment
+        has none, its sound is the reply's own (FakeAudio echo)."""
         self.segments.append({"start": start_ms, "end": end_ms, "text": text, "final_ms": final_ms,
-                              "interims": list(interims), "how": how})
+                              "interims": list(interims), "how": how,
+                              "voice": bool(text) if voice is None else voice})
 
     def detector(self, t, decision="barge_in", reason="open"):
         self.detectors.append((t, decision, reason))
@@ -106,9 +110,15 @@ class FakeSTT:
         self.utt = 0
         self.tasks = []
         self.finalized: set = set()
+        self.mic: list = []
 
     def feed(self, frame):
-        pass
+        self.mic.append(frame)
+
+    def audio(self, start, end):
+        """The mic's samples [start, end), as BaseSTT.audio."""
+        x = np.concatenate(self.mic) if self.mic else np.zeros(0, np.int16)
+        return x[max(0, start):max(0, end)]
 
     def begin(self):
         self.utt += 1
@@ -120,7 +130,7 @@ class FakeSTT:
     async def _interim(self, utt, t, text):
         await wait_ms(self.clock, t - self.clock.ms)
         if self.on_interim_utt is not None:
-            self.on_interim_utt(utt, text)
+            self.on_interim_utt(utt, text() if callable(text) else text)
 
     async def final_for(self, utt):
         seg = self.s.segments[utt - 1]
@@ -130,7 +140,7 @@ class FakeSTT:
         if utt in self.finalized:
             return "", "gone"
         self.finalized.add(utt)
-        return seg["text"], "spec"
+        return (seg["text"]() if callable(seg["text"]) else seg["text"]), "spec"
 
     async def start(self):
         pass
@@ -213,14 +223,30 @@ class FakeTTS:
 
 
 class FakeAudio:
-    """FileAudio's frame loop without files: the sink ticks, then the clock advances."""
+    """FileAudio's frame loop without files: the sink ticks, then the clock advances. The mic is
+    silent but for a pseudo-voice in segments with `voice`, and, with `echo_gain_db`, the sink's
+    output 30 ms late at that gain (FileAudio's echo option)."""
 
-    def __init__(self, log: EventLog, script: Script):
+    def __init__(self, log: EventLog, script: Script, echo_gain_db: Optional[float] = None):
         self.clock = log.clock
         self.sink = Sink(self.clock, log)
         self.s = script
         self.done = False
         self.heard: list = []
+        self.echo_gain_db = echo_gain_db
+        self.rng = np.random.default_rng(7)
+
+    def _mic(self, pos: int) -> np.ndarray:
+        x = np.zeros(FRAME, np.float64)
+        t = pos * 1000.0 / SR
+        if any(seg["voice"] and seg["start"] <= t < seg["end"] for seg in self.s.segments):
+            x += self.rng.normal(0, 2000, FRAME)              # the user's voice, -24 dBFS
+        if self.echo_gain_db is not None and self.heard:
+            out = np.concatenate(self.heard[-3:])
+            d = int(0.03 * SR)
+            if len(out) >= FRAME + d:
+                x += out[len(out) - FRAME - d:len(out) - d] * 10 ** (self.echo_gain_db / 20)
+        return np.clip(np.round(x), -32768, 32767).astype(np.int16)
 
     def turn_hint(self):
         return None
@@ -232,8 +258,9 @@ class FakeAudio:
                 break
             pos = self.clock.samples
             self.heard.append(self.sink.tick(pos, FRAME))
+            frame = self._mic(pos)
             self.clock.advance(FRAME)
-            yield np.zeros(FRAME, np.int16)
+            yield frame
             for _ in range(3):
                 await asyncio.sleep(0)
 
@@ -242,9 +269,9 @@ class FakeAudio:
         return bool(f and f()) or self.sink.is_playing()      # as FileAudio waits (paused counts)
 
 
-def make(script: Script, cfg: Optional[dict] = None):
+def make(script: Script, cfg: Optional[dict] = None, echo_gain_db: Optional[float] = None):
     log = EventLog(Clock())
-    audio = FakeAudio(log, script)
+    audio = FakeAudio(log, script, echo_gain_db)
     c = Components(endpointer=FakeEndpointer(script), stt=FakeSTT(script, log.clock),
                    brain=FakeBrain(script, log.clock), tts=FakeTTS(script, log.clock),
                    bargein=FakeBargeIn(script), turntaking=TurnTaking({"fillers": False}))

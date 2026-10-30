@@ -190,8 +190,23 @@ def scenario(seed: int):
     kinds: dict = {}
     t = 100.0
     used: set = set()
+    # echo family: the mic hears the reply (FakeAudio echo), and some segments are only that echo
+    echo_db = float(rng.uniform(-38, -26)) if rng.random() < 0.3 else None
+    holder: dict = {}                              # the adapter, once run_seed made it
+
+    def echo_text(t0, t1, text):
+        """What the STT writes for an echo segment: a misheard fragment if the reply played
+        during it, else nothing (it heard silence)."""
+        def heard():
+            o = holder.get("o")
+            a, b = int(t0 * 24), int(t1 * 24)
+            played = o is not None and any(x < b and y > a for x, y, _ in o.sink.tags)
+            return text if played else ""
+        return heard
+
     while t < 22000:
-        kind = rng.choice(["words", "words", "noise", "hallucination", "backchannel"])
+        kind = rng.choice(["words", "words", "noise", "hallucination", "backchannel"]
+                          + (["echo", "echo"] if echo_db is not None else []))
         dur = float(rng.uniform(150, 2000)) if kind == "words" else float(rng.uniform(100, 700))
         if kind == "words":
             text = str(rng.choice(WORDS))
@@ -204,10 +219,16 @@ def scenario(seed: int):
             text, ints = str(rng.choice(["yeah", "okay", "right"])), []
         elif kind == "hallucination":
             text, ints = "Thank you.", []
+        elif kind == "echo":
+            dur = float(rng.uniform(600, 2000))
+            frag = str(rng.choice(["something", "A full reload.", "Shreds are cheaper.", "In the book."]))
+            text = echo_text(t, t + dur, frag)
+            ints = [(t + 60 + 1000 + rng.uniform(350, 500), echo_text(t, t + dur, frag.split()[0]))]
         else:
             text, ints = "", []
         how = "timeout" if kind == "words" and rng.random() < 0.08 else "spec"
-        s.segment(t, t + dur, text, final_ms=float(rng.choice([100, 300, 800, 2500])), interims=ints, how=how)
+        s.segment(t, t + dur, text, final_ms=float(rng.choice([100, 300, 800, 2500])), interims=ints, how=how,
+                  voice=kind in ("words", "backchannel"))
         kinds[str(len(s.segments))] = kind
         if rng.random() < 0.3:
             s.detector(t + 40, "barge_in", "open")
@@ -218,16 +239,17 @@ def scenario(seed: int):
         s.errors = {str(rng.choice(WORDS))}
     tasks = [float(rng.uniform(0, 20000)) for _ in range(int(rng.choice([0, 0, 1, 2])))]
     speakers = bool(rng.random() < 0.2)
-    return s, kinds, tasks, speakers
+    return s, kinds, tasks, speakers, echo_db, holder
 
 
 def run_seed(seed: int) -> None:
-    s, kinds, tasks, speakers = scenario(seed)
+    s, kinds, tasks, speakers, echo_db, holder = scenario(seed)
     log = EventLog(Clock())
-    audio = FakeAudio(log, s)
+    audio = FakeAudio(log, s, echo_db)
     c = Components(endpointer=FakeEndpointer(s), stt=FakeSTT(s, log.clock), brain=FakeBrain(s, log.clock),
                    tts=FakeTTS(s, log.clock), bargein=FakeBargeIn(s), turntaking=TurnTaking({"fillers": False}))
     o = CheckedAdapter(audio, log, c, {"orchestrator": {"floor": True}, "floor": {"speakers": speakers}})
+    holder["o"] = o
     truth = o.shim.truth
     for i, seg in enumerate(s.segments, 1):
         utt = str(i)
@@ -255,12 +277,15 @@ def run_seed(seed: int) -> None:
         for n, at in enumerate(tasks, 1):
             asyncio.ensure_future(announce(at, n))
         await o.run()
-        o.checker.quiescent()
+        try:
+            o.checker.quiescent()
+        finally:
+            # a violation raised inside a task (an STT or brain callback) explains a stall: first
+            o.failures += [e.extra["error"] for e in log.events if e.event == "x_task_error"]
+            if o.failures:
+                raise AssertionError("; ".join(o.failures[:3]))
         await o.close()
     asyncio.run(go())
-    o.failures += [e.extra["error"] for e in log.events if e.event == "x_task_error"]
-    if o.failures:
-        raise AssertionError("; ".join(o.failures[:3]))
 
 
 class TestAdapterFuzz(unittest.TestCase):

@@ -28,6 +28,7 @@ import numpy as np
 
 from . import floor as F
 from .brain import Interrupted
+from .echo import echo_corr
 from .events import SR, EventLog
 from .tts import Chunker
 
@@ -96,6 +97,7 @@ class FloorAdapter:
         self.timers: dict = {}
         self.g = 0
         self.utt_of: dict = {}                     # endpointer segment -> STT utterance id
+        self.seg_span: dict = {}                   # utterance id -> [start sample, speech end sample]
         self.reply: Optional[_Reply] = None
         self.records: list = []                    # every reply, for transcript()
         self.user_turns: dict = {}
@@ -183,9 +185,13 @@ class FloorAdapter:
                     self.g += 1
                     utt = self.c.stt.begin()
                     self.utt_of[self.g] = utt
+                    self.seg_span[utt] = [max(0, self.clock.samples - int(0.06 * SR)), None]
                     hint = self.audio.turn_hint()
                     self._on(F.SpeechStart(self.g, str(utt), None if hint is None else str(hint)))
                 elif d.kind == "turn_end":
+                    span = self.seg_span.get(self.utt_of.get(self.g))
+                    if span is not None and d.pause_start_ms is not None:
+                        span[1] = int(d.pause_start_ms * SR / 1000)
                     self._log_endpoint()
                     self._on(F.TurnEnd(self.g, d.pause_start_ms))
                     self._warm_tts()
@@ -212,12 +218,30 @@ class FloorAdapter:
             return
         self._spawn(warm())
 
+    def _echo(self, utt: int) -> Optional[float]:
+        """Words step 1: how much the segment's mic audio (so far) is the reply's own audio: the
+        correlation with what the sink played 0-400 ms before. None when it cannot be measured."""
+        span = self.seg_span.get(utt)
+        audio = getattr(self.c.stt, "audio", None)
+        if span is None or audio is None:
+            return None
+        end = min(span[1] or self.clock.samples, self.clock.samples)
+        start = max(span[0], end - 3 * SR)                 # the last 3 s are enough
+        lag = int(0.4 * SR)
+        if end - start < SR // 10 or start < lag:
+            return None
+        mic = audio(start, end)
+        ref = self.sink.heard(end)[start - lag:end]
+        if len(mic) < end - start or not np.any(ref):
+            return 0.0 if len(mic) == end - start else None
+        return round(echo_corr(mic, ref, lag), 3)
+
     def _on_interim(self, utt: int, text: str) -> None:
         try:
             self.c.endpointer.on_transcript(text, False)
         except Exception:
             pass
-        self._on(F.Interim(str(utt), text))
+        self._on(F.Interim(str(utt), text, echo=self._echo(utt)))
 
     async def _final(self, utt: Optional[int]) -> None:
         if utt is None:
@@ -231,7 +255,10 @@ class FloorAdapter:
             self.c.endpointer.on_transcript(text, True)
         except Exception:
             pass
-        self._on(F.Final(str(utt), text, how))
+        echo = self._echo(utt)
+        if echo is not None:
+            self.log.emit("x_echo", None, utt=utt, score=echo)
+        self._on(F.Final(str(utt), text, how, echo=echo))
 
     def _sink_events(self) -> None:
         """After each frame: what of the current reply was heard (played) and whether it is out."""
@@ -377,8 +404,11 @@ class FloorAdapter:
             text = await sentences.get()
             if text is None:
                 return True
+            queued = self.clock.ms
             try:
                 pcm = await self._synthesize(text)
+                self.log.emit("x_tts_piece", self._turn(r.label), piece=f"p{n}", text=text[:80],
+                              queued_ms=queued, ready_ms=self.clock.ms)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

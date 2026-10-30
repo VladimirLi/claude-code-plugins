@@ -32,6 +32,7 @@ DEFAULTS = {
     "tail_ms": 1000.0,           # question tail: the piece last played within this before the start
     "heard_frac": 0.6,           # rule 7: an announcement is heard at this share of content audio
     "max_nowords_pauses": 2,     # rule 2: then the detector only ducks
+    "echo_corr": 0.5,            # Words 1: an echo score at least this makes a segment echo
     "max_silent_tries": 3,       # rule 7: an item whose carrying replies played nothing this often is dropped
 }
 
@@ -52,6 +53,8 @@ def _echo_free(tokens: list, played: list, speakers: bool) -> list:
     flat = [w for p in pieces for w in p]
     if speakers and set(tokens) <= set(flat):
         return []
+    if len(tokens) >= 2 and _near_run(tokens, flat):
+        return []                                  # a misheard echo: "shreds are cheaper"
     out, i = [], 0
     while i < len(tokens):
         run = 0
@@ -66,6 +69,40 @@ def _echo_free(tokens: list, played: list, speakers: bool) -> list:
             out.append(tokens[i])
             i += 1
     return out
+
+
+def _near(a: str, b: str) -> bool:
+    """Nearly the same word: equal, or both 4+ letters and an edit distance of at most a third of
+    the longer one ("shreds"/"threads", "reuse"/"reuses")."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 4:
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] <= max(len(a), len(b)) / 3
+
+
+def _near_run(tokens: list, flat: list, max_gap: int = 2) -> bool:
+    """Every token nearly matches the played text, in order, skipping at most max_gap played
+    words between two of them (the STT drops and mishears words of an echo)."""
+    for start in range(len(flat)):
+        if not _near(tokens[0], flat[start]):
+            continue
+        j, ok = start, True
+        for t in tokens[1:]:
+            hit = next((k for k in range(j + 1, min(len(flat), j + 2 + max_gap)) if _near(t, flat[k])), None)
+            if hit is None:
+                ok = False
+                break
+            j = hit
+        if ok:
+            return True
+    return False
 
 
 def make_meaningful(speakers: bool = False, hallucinations=None) -> Callable:
@@ -104,6 +141,7 @@ class Interim:
     utt_id: str
     text: str
     t_ms: float = 0.0
+    echo: Optional[float] = None  # the adapter's echo score of the segment's audio so far (live/echo.py)
 
 
 @dataclass
@@ -119,6 +157,7 @@ class Final:
     text: str
     how: str = ""
     t_ms: float = 0.0
+    echo: Optional[float] = None  # the echo score of the whole segment
 
 
 @dataclass
@@ -311,6 +350,7 @@ class Seg:
     interim_seen_ms: Optional[float] = None
     interim_words: bool = False
     last_interim: str = ""
+    echo: bool = False           # its audio is the reply's echo: it never holds, pauses or ducks
 
 
 @dataclass
@@ -463,6 +503,9 @@ class Floor:
         if seg is None or seg.status == "final":
             return
         seg.interim_seen_ms = self.now
+        if self._is_echo(ev.echo):
+            self._echo_seg(seg)
+            return
         if not self._words(seg, ev.text, self._over_heard(seg, self.now)):
             return
         seg.interim_words = True
@@ -502,6 +545,9 @@ class Floor:
             seg.speech_end_ms = self.now
             seg.over_heard = self._over_heard(seg, self.now)
         seg.status = "final"
+        if self._is_echo(ev.echo) or (ev.echo is None and seg.echo):
+            self._no_words(seg, "final_echo")       # Words 1: the reply's own audio, whatever the text
+            return
         words = self._words(seg, ev.text, seg.over_heard)
         dropout = not self.meaningful(ev.text, self._window(seg), earlier_words=seg.interim_words)
         if dropout and seg.interim_words:
@@ -535,6 +581,8 @@ class Floor:
         if ev.decision != "barge_in":
             return
         target = self._ducked_target(r) or self._open_seg() or self._new_blip()
+        if target.echo:
+            return                                  # rules 1-2: an echo segment never pauses or ducks
         if r.heard != "content":
             self._hold_on(target, "hold", f"detector_{ev.reason}", stop_tentative=True)
             return
@@ -769,6 +817,20 @@ class Floor:
             r.episode_paused = True
             self._emit("barge_in_detected", r.label, reason=reason)
             self._emit("playback_paused", r.label, reason=reason)
+
+    def _is_echo(self, score: Optional[float]) -> bool:
+        return score is not None and score >= self.cfg["echo_corr"]
+
+    def _echo_seg(self, seg: Seg) -> None:
+        """Rules 1-2: the segment is the reply's echo. It leaves the pause set and ducked_on and
+        holds nothing from now on; its final is no words."""
+        if not seg.echo:
+            seg.echo = True
+            r = self.reply
+            if r is not None:
+                r.pause_on.discard(seg.g)
+                r.ducked_on.discard(seg.g)
+            self._floor("echo", "echo_score", g=seg.g)
 
     def _quiet(self, seg: Seg) -> bool:
         """Rule 4: an interim with no words, or a turn_end with no interim words. A blip has

@@ -303,6 +303,46 @@ class TestAdapterReview(unittest.TestCase):
         self.assertFalse([t for a, b, t in o.sink.tags if t[1].startswith("k")])
 
 
+class TestEchoScore(unittest.TestCase):
+    """A/B 2026-10-30 with echo: the reply's own audio opened segments the STT wrote as misheard
+    fragments ("A full reload.", "something"); they paused and interrupted the reply."""
+
+    def _run(self, s, speakers):
+        o, log = make(s, {"floor": {"speakers": speakers}}, echo_gain_db=-26.0)
+        asyncio.run(drive(o))
+        return o, log
+
+    def _script(self):
+        s = Script()
+        s.replies = {"": "One two three four five six seven eight nine ten eleven twelve."}
+        s.segment(100, 1100, Q1)                   # plays about 2350-5950
+        return s
+
+    def test_echo_segment_never_interrupts(self):
+        for speakers in (False, True):
+            s = self._script()
+            s.segment(2800, 3800, "something", interims=[(3500, "some")], voice=False)
+            o, log = self._run(s, speakers)
+            self.assertEqual([c[0] for c in o.c.brain.calls], [Q1], f"speakers={speakers}")
+            self.assertEqual(events(log, "playback_paused"), [])
+            self.assertGreater(events(log, "x_echo")[-1].extra["score"], 0.5)
+
+    def test_real_words_over_the_echo_still_interrupt(self):
+        for speakers in (False, True):
+            s = self._script()
+            s.segment(2800, 3800, "stop show me the errors", interims=[(3500, "stop show")])
+            o, log = self._run(s, speakers)
+            self.assertEqual([c[0] for c in o.c.brain.calls], [Q1, "stop show me the errors"],
+                             f"speakers={speakers}")
+            self.assertLess(events(log, "x_echo")[-1].extra["score"], 0.5)
+
+    def test_tts_pieces_are_timed(self):
+        s = self._script()
+        o, log = self._run(s, False)
+        t = events(log, "x_tts_piece")[0].extra
+        self.assertGreaterEqual(t["ready_ms"], t["queued_ms"])
+
+
 class TestStaleCallbacks(unittest.TestCase):
     def test_a_stopped_reply_never_reaches_the_sink(self):
         s = Script(brain_gap_ms=1500)              # the old reply keeps producing after its stop

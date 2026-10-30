@@ -82,10 +82,20 @@ One new module, `live/floor.py`: a pure, synchronous state machine.
   belong to an utterance.
 - **Resolved**: a segment with its final, or a blip past `short_bargein_ms`.
 - **Words** (`meaningful`), applied to finals and interims alike. Tokens are `normalize(text).split()`.
+  0. **Echo by sound** *(step 4, after the echo A/B)*: the adapter scores each interim and final
+     with the segment's echo score (live/echo.py): the best normalized correlation of its mic
+     audio with what the sink played 0-400 ms before. A score of at least `echo_corr` (0.5) makes
+     the segment echo: no words, whatever the STT wrote. Someone talking over the reply lowers the
+     score, so a real interruption still counts. (A/B 2026-10-30: with echo, 20 of 25 interrupts
+     were the reply's own audio, transcribed as misheard fragments: "Shreds are cheaper." over
+     "Threads are cheaper", "something".)
   1. **Echo**: remove tokens of the reply text played from 0.5 s before the segment's start to now,
      where they match as a run of at least 3 tokens in order, or where the whole text equals one
      played piece ("Sure.", "Hold on."). When `speakers` is true, a text whose tokens all appear in
-     that played window is echo too, whatever its length. For the replay of an old recording, use
+     that played window is echo too, whatever its length. *(Step 4: in both modes, a text of 2+
+     tokens that all nearly match the played window in order is echo: a word nearly matches when
+     equal, or when both have 4+ letters and an edit distance of at most a third of the longer;
+     up to 2 played words may be skipped between two matches.)* For the replay of an old recording, use
      the recorded `x_reply_text` of replies whose span (from their `first_reply_audio` to their
      stop or end; orchestrator.py:771 logs no span) overlaps the window.
   2. Remove hum and hesitation tokens (`_HUMS`, which gains `mmmm` through the same `normalize`
@@ -163,9 +173,9 @@ from the `hint` of its first word segment if the bench gave one.
 | Event | From | Note |
 |---|---|---|
 | `speech_start(g, utt_id, hint)` | endpointer + `stt.begin()` | `hint` = `turn_hint()` from the bench, or None |
-| `interim(utt_id, text)` | STT | dropped if that segment already has its final |
+| `interim(utt_id, text, echo)` | STT | dropped if that segment already has its final; `echo`: the adapter's echo score of the segment so far, or none |
 | `turn_end(g, pause_start_ms)` | endpointer | |
-| `final(utt_id, text, how)` | STT | |
+| `final(utt_id, text, how, echo)` | STT | `echo`: the echo score of the whole segment, or none |
 | `detector(decision, reason)` | `BargeIn.feed` | `duck`, `barge_in` (reason `open`, `fric`, `long`, `burst`), `resume` |
 | `brain_text(rid, delta)`, `brain_done(rid)`, `brain_error(rid)` | brain | |
 | `tts_piece(rid, piece, kind, text, dur_ms)` | TTS pipeline | a piece is synthesized and queued at the gate |
@@ -204,6 +214,9 @@ The word boundary is estimated from the piece's length, because the TTS gives no
 
 ## Rules
 
+0. **Echo never holds.** *(Step 4.)* A segment whose interim comes with an echo score of at least
+   `echo_corr` is echo: it leaves the pause set and `ducked_on`, a detector barge-in on it is
+   ignored, and its final is no words. It holds, pauses and ducks nothing from then on.
 1. **Before heard content, sound holds.** While the reply has no heard content, a new segment adds
    its id to the gate's pause set (`cause = hold`). Nothing plays until the set is empty or rule 4
    allows a tentative play. Holds never count toward `nowords_pauses` or `resume_guard_ms`.
