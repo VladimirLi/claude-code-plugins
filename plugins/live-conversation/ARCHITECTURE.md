@@ -82,6 +82,7 @@ await stt.start()                           # warm connections/models
 stt.feed(frame)                             # every frame, always
 stt.begin()                                 # utterance starts (keeps preroll_ms before)
 stt.on_interim = fn(text)                   # optional, streaming STT
+stt.on_event = fn(name, fields)             # optional: x_stt_final / _reconnect / _error / _dropped events
 text = await stt.finalize()                 # final text since begin()
 await stt.close()
 ```

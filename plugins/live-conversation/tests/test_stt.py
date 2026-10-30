@@ -243,6 +243,92 @@ class TestSpeculative(unittest.TestCase):
         self.assertEqual(run(go()), "")
 
 
+class TestLateFinalize(unittest.TestCase):
+    """Bar session 20261030-110521, turns 15 and 16: the user went on talking right at the turn
+    end, and the mic loop drained a backlog of frames without yielding. The endpointer's
+    speech_start (begin()) ran before the turn-end task reached finalize(). finalize() then
+    read the new utterance: turn 15 (37 s of speech) came back "" after one request on the
+    preroll, and turn 16 came back "" at once (the old empty request counted as covering it)."""
+
+    def _burst(self, s, events):
+        s.on_event = lambda name, fields: events.append((name, fields))
+
+    def test_begin_before_finalize_runs_keeps_the_ended_turn(self):
+        async def go():
+            events = []
+            s = FakeSTT()
+            self._burst(s, events)
+            await feed(s, [QUIET] * 20)
+            s.begin()
+            await feed(s, [LOUD] * 40 + [QUIET] * 50)    # 0.8 s of speech, 1 s pause: spec is back
+            await asyncio.sleep(0.1)
+            first = asyncio.create_task(s.finalize())    # turn end: a task, not run yet
+            for f in [LOUD] * 3:                         # backlog drained without a yield:
+                s.feed(f)                                # the user talks again ...
+            s.begin()                                    # ... speech_start
+            await feed(s, [LOUD] * 20 + [QUIET] * 10)
+            await asyncio.sleep(0.1)
+            second = await s.finalize()
+            return s, await first, second, events
+        s, first, second, events = run(go())
+        self.assertEqual(first, "w40")                   # not "" and not the new speech
+        self.assertEqual(second, "w23")                  # 3 frames before speech_start + 20
+        finals = [f for n, f in events if n == "x_stt_final"]
+        self.assertEqual([f["late"] for f in finals], [True, False])
+        self.assertEqual([f["empty"] for f in finals], [False, False])
+
+    def test_late_finalize_of_a_long_chunked_turn(self):
+        async def go():
+            s = FakeSTT({"chunk_min_s": 0.5})
+            await feed(s, [QUIET] * 20)
+            s.begin()
+            for n in (30, 30, 7):
+                await feed(s, [LOUD] * n + [QUIET] * 6)
+                await asyncio.sleep(0.08)
+            await feed(s, [QUIET] * 40)
+            first = asyncio.create_task(s.finalize())
+            for f in [LOUD] * 3:
+                s.feed(f)
+            s.begin()
+            await feed(s, [LOUD] * 10 + [QUIET] * 10)
+            await asyncio.sleep(0.1)
+            return await first, await s.finalize()
+        first, second = run(go())
+        self.assertEqual(first, "w30 w30 w7")
+        self.assertEqual(second, "w13")
+
+    def test_unfinalized_utterance_is_dropped_not_reused(self):
+        """A begin() with no finalize() for the open utterance must not shift later finals."""
+        async def go():
+            events = []
+            s = FakeSTT({"late_final_s": 0.05})
+            self._burst(s, events)
+            await feed(s, [QUIET] * 20)
+            s.begin()
+            await feed(s, [LOUD] * 10 + [QUIET] * 20)
+            s.begin()                                    # never finalized
+            await feed(s, [LOUD] * 25 + [QUIET] * 10)
+            await asyncio.sleep(0.1)
+            return await s.finalize(), events
+        text, events = run(go())
+        self.assertTrue(text.startswith("w2"))           # the second utterance (25 loud frames)
+        self.assertIn("x_stt_dropped", [n for n, _ in events])
+
+    def test_failed_final_is_reported(self):
+        async def go():
+            events = []
+            s = FakeSTT({"hedge_ms": 0}, fail_first=99)
+            self._burst(s, events)
+            await feed(s, [QUIET] * 20)
+            s.begin()
+            await feed(s, [LOUD] * 10)
+            await s.finalize()
+            return events
+        finals = [f for n, f in run(go()) if n == "x_stt_final"]
+        self.assertEqual(finals[-1]["how"], "failed")
+        self.assertTrue(finals[-1]["empty"])
+
+
 class TestAzureShutdown(unittest.TestCase):
     def test_close_unblocks_a_hung_request(self):
         """A server that accepts and never answers: close() must free the worker thread at once."""
@@ -275,6 +361,42 @@ class TestAzureShutdown(unittest.TestCase):
         for conn, _ in held:
             conn.close()
         srv.close()
+
+    def test_reconnect_and_error_are_reported(self):
+        from live.stt import AzureSTT
+        os.environ.setdefault("AZURE_OPENAI_API_KEY", "x")
+        os.environ.setdefault("AZURE_OPENAI_RESOURCE_NAME", "x")
+
+        class Resp:
+            status = 200
+
+            def read(self):
+                return b'{"text": "hi"}'
+
+        class Conn:
+            def __init__(self, fail):
+                self.fail = fail
+
+            def request(self, *a, **k):
+                if self.fail:
+                    raise ConnectionResetError("reset")
+
+            def getresponse(self):
+                return Resp()
+
+            def kill(self):
+                pass
+        s = AzureSTT({})
+        fails = [True, False, True, True]
+        s._conn = lambda fresh=False: Conn(fails.pop(0))
+        events = []
+        s.on_event = lambda name, fields: events.append((name, fields))
+        self.assertEqual(s._transcribe(np.zeros(SR // 2, np.int16)), "hi")
+        with self.assertRaises(OSError):
+            s._transcribe(np.zeros(SR // 2, np.int16))
+        self.assertEqual([n for n, _ in events], ["x_stt_reconnect", "x_stt_reconnect", "x_stt_error"])
+        self.assertEqual(events[0][1]["error"], "ConnectionResetError")
+        asyncio.run(s.close())
 
 
 class TestBuffer(unittest.TestCase):

@@ -132,6 +132,7 @@ class Orchestrator:
         self.stats: list[dict] = []                    # per reply: how the first audio was obtained (debug)
         try:
             self.c.stt.on_interim = self._on_interim
+            self.c.stt.on_event = lambda name, fields: self.log.emit(name, self.label, **fields)
         except Exception:
             pass
         try:
