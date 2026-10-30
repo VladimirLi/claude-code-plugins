@@ -45,7 +45,7 @@
     "haiku_loop": {
       "type": "boolean",
       "title": "Haiku outer loop",
-      "description": "When a do falls short (stuck, max_actions, ambiguous), let Claude Haiku, on your Claude subscription through one kept-open claude -p child, split the goal into short do sub-goals (at most 8 and 60 s per call). Confirmations, logins and captchas still come back to you. Off by default.",
+      "description": "When a do falls short (stuck, max_actions, ambiguous), or first for a pick by price or rank, let Claude Haiku, on your Claude subscription through one kept-open claude -p child, read the page and open links, click or run short do sub-goals (at most 8 and 60 s per call). Confirmations, logins and captchas still come back to you. Off by default.",
       "default": false
     }
   },

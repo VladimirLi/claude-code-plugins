@@ -1,10 +1,11 @@
+import { appendFileSync } from "node:fs";
 // The five operations (open, do, act, observe, check) plus eval, over one Tab.
 // Each returns { text, image?, data } where `text` is what Claude reads.
 import { jev, stats } from "./jev.mjs";
 import { KEY_NAMES } from "./tab.mjs";
 import { brief, elementLine, renderPage, renderDiff, pageDiff, diffForJev } from "./format.mjs";
 import { fence, scrub, secretsOf, redactValues, gateRule, dialogRisky, domainAllowed, REDACTED, SECRET_KEY } from "./safety.mjs";
-import { haiku, haikuOn, shouldEngage, outerLoop, HAIKU_MS } from "./haiku.mjs";
+import { haiku, haikuOn, shouldEngage, planFirst, outerLoop, HAIKU_MS, READER, READ_CHARS, PAGE_CHARS, RISKY_LINK } from "./haiku.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_SINGLE = 240, GROUP = 30, MAX_STATE_CHARS = 70_000;
@@ -185,6 +186,8 @@ export class Agent {
     if (!/^[a-z]+:/i.test(url)) url = `https://${url}`;
     if (!domainAllowed(url)) return this.out(`status: blocked\ninfo: ${url} is outside JEVB_ALLOWED_DOMAINS`, { status: "blocked" });
     const t0 = Date.now();
+    // with the Haiku loop on, its child starts now, so a first Haiku turn does not wait for it
+    if (haikuOn()) { const c = haiku(); c.begin(); c.end(); }
     await this.tab.navigate(url);
     const page = await this.tab.snapshot();
     this.shown = page;
@@ -434,31 +437,84 @@ export class Agent {
     try { return await this.loop(args); } finally { await this.tab.allowSubmits(false); }
   }
 
-  // The Haiku outer loop: a plain do first (the child warms up meanwhile); Haiku only when it
-  // fell short (see shouldEngage). One wall-clock budget covers the plain do and every sub-goal.
+  // The Haiku outer loop. Most goals: a plain do first (the child warms up meanwhile), and Haiku
+  // only when it fell short (shouldEngage). Goals that need comparing or a fact the goal only
+  // implies (planFirst: "the cheapest book", "every product under $20") go to Haiku first, since
+  // a plain do reports a wrong pick as done. One wall-clock budget covers everything.
   async withHaiku(args) {
     const t0 = Date.now(), deadline = t0 + HAIKU_MS, child = haiku();
     child.begin();
     try {
-      const first = await this.loop({ ...args, deadline });
-      if (!shouldEngage(args.goal, first.data, first.text)) return first;
+      const early = planFirst(args.goal);
+      const first = early ? null : await this.loop({ ...args, deadline });
+      if (first && !shouldEngage(args.goal, first.data, first.text)) return first;
       const r = await outerLoop({
         goal: args.goal, values: args.values ?? {}, first, t0,
         run: (goal, values, dl) => this.loop({ goal, values, vision: args.vision, deadline: dl }),
-        ask: (m, ms) => child.ask(scrub(m, this.secrets), ms),
+        ask: async (m, ms) => {
+          const msg = scrub(m, this.secrets), reply = await child.ask(msg, ms);
+          // development only: JEVB_HAIKU_TRACE names a file that gets each message and reply
+          if (process.env.JEVB_HAIKU_TRACE) try { appendFileSync(process.env.JEVB_HAIKU_TRACE, `\n===== message\n${msg}\n===== reply\n${scrub(reply, this.secrets)}\n`, { mode: 0o600 }); } catch {}
+          return reply;
+        },
         page: async () => this.haikuPage(),
+        go: (href) => this.haikuGo(href),
+        read: (urls) => this.haikuRead(urls),
+        click: (id) => this.haikuClick(id),
       });
+      // Haiku could not start or stopped before any sub-goal: the plain do, as without it
+      if (r.fallback) {
+        const plain = await this.loop({ ...args, deadline });
+        return this.out(`${plain.text}\nhaiku: ${r.data.haiku.why ?? r.data.haiku.outcome}; this is the plain result`, { ...plain.data, ...r.data });
+      }
       return this.out(r.text, r.data);
     } finally { child.end(); }
   }
 
-  // The short page view Haiku reads (fenced by the caller): no element table beyond what is in view.
-  haikuPage() {
-    const p = this.shown;
+  // The page as Haiku reads it (fenced by the caller): url, title, the form controls, then the
+  // text in reading order with links as [text](href).
+  async haikuPage() {
+    const p = await this.tab.snapshot().catch(() => this.shown);
     if (!p) return "";
-    const els = p.elements.filter((e) => !e.off && !e.hidden);
+    this.shown = p;
+    const [text] = await this.tab.eval(`(${READER})(null, ${PAGE_CHARS})`, { timeout: 5000 }).catch(() => [p.text.slice(0, PAGE_CHARS)]);
+    // form fields with their ids (a search box sits outside <main>); buttons show inline in the text
+    const fields = p.elements.filter((e) => !e.hidden && (/^(input|textarea|select)/.test(e.tag) || /\[(combobox|textbox|searchbox)\]/.test(e.tag)));
+    const controls = fields.sort((a, b) => !!a.off - !!b.off).slice(0, 25);
     return [`url: ${p.url}`, `title: ${p.title}`, ...(p.dialogs?.length ? [`dialogs/overlays: ${p.dialogs.join(" || ").slice(0, 300)}`] : []),
-      `visible text: ${p.text.slice(0, 1200)}${p.text.length > 1200 ? " …" : ""}`, `elements in view (${Math.min(els.length, 50)} of ${p.elements.length}):`, ...els.slice(0, 50).map(elementLine)].join("\n");
+      `form fields (${controls.length} of ${fields.length}):`, ...controls.map(elementLine),
+      `page text, links as [text](href):`, text].join("\n");
+  }
+
+  // Haiku's `go`: open a link a page view showed, as a GET navigation (never a form submit).
+  async haikuGo(href) {
+    const t0 = Date.now();
+    let url;
+    try { url = new URL(href, this.shown?.url ?? (await this.tab.url())).href; } catch { return this.out(`status: error\ninfo: not a link: ${href}`, { status: "error" }); }
+    if (!/^https?:/.test(url) || RISKY_LINK.test(url)) return this.out(`status: blocked\ninfo: ${url} is not opened by the Haiku loop (not http, or a link that may change state)`, { status: "blocked" });
+    if (!domainAllowed(url)) return this.out(`status: blocked\ninfo: ${url} is outside JEVB_ALLOWED_DOMAINS`, { status: "blocked" });
+    try { await this.tab.navigate(url); } catch (e) { return this.out(`status: error\ninfo: ${String(e.message).slice(0, 120)}`, { status: "error" }); }
+    const page = await this.tab.snapshot();
+    this.shown = page;
+    this.events();
+    if (page.captcha) return this.out(`status: needs_human\ninfo: the page shows a captcha or bot check; a person has to solve it\nurl: ${page.url}\ntitle: ${page.title}`, { status: "needs_human" });
+    return this.out(`status: done\ninfo: opened the link ${href}\nactions (1, 0 Jev calls, ${Date.now() - t0} ms):\n  - go ${href}\nurl: ${page.url}\ntitle: ${page.title}\n${fence(`visible text: ${page.text.slice(0, 700)}`)}`, { status: "done", url: page.url, ms: Date.now() - t0 });
+  }
+
+  // Haiku's `click`: one act click, with act's irreversible gates (never allow_irreversible).
+  // act's ok is the click's done: it ran and the page settled.
+  async haikuClick(id) {
+    let r;
+    try { r = await this.act({ actions: [{ op: "click", id }] }); }
+    catch (e) { return this.out(`status: error\ninfo: ${String(e.message).slice(0, 120)}`, { status: "error" }); }
+    return r.data.status === "ok" ? { text: r.text.replace(/^status: ok/, "status: done"), data: { ...r.data, status: "done" } } : r;
+  }
+
+  // Haiku's `read`: pages of the current site, fetched in the page without leaving it.
+  async haikuRead(urls) {
+    const ok = urls.filter((u) => !RISKY_LINK.test(u) && domainAllowed((() => { try { return new URL(u, this.shown?.url).href; } catch { return ""; } })()));
+    const out = ok.length ? await this.tab.eval(`(${READER})(${JSON.stringify(ok)}, ${READ_CHARS})`, { timeout: 15_000 }) : [];
+    return [...out, ...urls.filter((u) => !ok.includes(u)).map((u) => `page ${u}: not read (a link that may change state, or outside JEVB_ALLOWED_DOMAINS)`)];
   }
 
   async loop({ goal, values = {}, max_actions, allow_irreversible = false, vision = false, deadline }) {
