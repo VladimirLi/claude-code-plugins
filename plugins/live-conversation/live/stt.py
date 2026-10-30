@@ -345,7 +345,10 @@ class SpeculativeSTT(BaseSTT):
         """What finalize() needs of the open utterance, cut at absolute sample `end`."""
         last = max(x for x in (self.last_sound, self.last_speech, self.seg_start) if x is not None)
         return {"utt": self.utt, "mark": self.mark, "end": end, "seg_start": self.seg_start,
-                "chunks": list(self.chunks_done), "jobs": [j for j in self.jobs if j.start == self.seg_start],
+                "chunks": list(self.chunks_done),
+                # not a request that reaches past the cut (an interim sent on the next utterance's
+                # first loud frames, before begin() froze this one): its text holds the next words
+                "jobs": [j for j in self.jobs if j.start == self.seg_start and j.end <= end],
                 "last": min(last, end), "late": False}
 
     def begin(self) -> None:

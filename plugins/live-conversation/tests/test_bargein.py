@@ -148,6 +148,18 @@ class TestRules(unittest.TestCase):
         bi.on_transcript("Wait, what about merge?")
         self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["barge_in"])
 
+    def test_transcript_of_speech_that_ended_before_the_episode_is_ignored(self):
+        # a turn's own final landing during a later click must not turn the click into a barge-in
+        bi = BargeIn()
+        run(bi, np.concatenate([noise(500), hum(200)]))
+        onset = bi.onset_ms
+        bi.on_transcript("What is going on with task two?", onset - 100)
+        self.assertNotIn("barge_in", kinds(run(bi, hum(20), t0=10000)))
+        bi = BargeIn()
+        run(bi, np.concatenate([noise(500), hum(200)]))
+        bi.on_transcript("Wait, what about merge?", bi.onset_ms + 100)
+        self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["barge_in"])
+
     def test_empty_transcript_resumes(self):
         # live session: noise the STT heard no words in stopped the reply
         bi = BargeIn()

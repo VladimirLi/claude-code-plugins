@@ -11,7 +11,7 @@ sys.path.insert(0, PLUGIN)
 
 from live.audio_io import Sink  # noqa: E402
 from live.events import FRAME, SR, Clock, EventLog  # noqa: E402
-from live.orchestrator import Components, Orchestrator  # noqa: E402
+from live.orchestrator import KEEPALIVE, Components, Orchestrator  # noqa: E402
 from live.turntaking import TurnTaking  # noqa: E402
 
 TONE = (np.sin(np.arange(SR // 10) / 5) * 8000).astype(np.int16)
@@ -649,6 +649,187 @@ class TestHoldEdges(unittest.TestCase):
         self.assertIsNone(o.c.brain.calls[1][1])
         self.assertFalse(r.interrupted)
         self.assertEqual(o.user_turns[r.turn], "What is the capital of Australia?")
+
+
+class DelaySTT(FakeSTT):
+    """Finals as (text, delay_s): each finalize() returns its text after its own delay."""
+
+    def __init__(self, items):
+        super().__init__("")
+        self.items = list(items)
+
+    async def finalize(self):
+        text, d = self.items.pop(0)
+        await asyncio.sleep(d)
+        return text
+
+
+class TestHoldRaces(unittest.TestCase):
+    """Second sweep of the hold code (after session 20261030-110521)."""
+
+    def test_out_of_order_empty_final_does_not_drop_the_question(self):
+        # G1 question; G2 words with a slow final; G3 a short noise whose '' comes back first.
+        async def go():
+            o, log = make_resume([], brain_delay=0.3, hold_max_ms=0.0)
+            o.c.stt = DelaySTT([("What is in the logs?", 0), ("and the errors too", 0.2), ("", 0)])
+            o._on_speech_start(); o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r1 = o.reply
+            o._on_speech_start(); o.in_user_turn = False
+            t2 = asyncio.ensure_future(o._handle_turn(o.label, o.gen))
+            await asyncio.sleep(0.02)
+            o._on_speech_start(); o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            self.assertIsNotNone(r1.held)            # G2's final is still on its way
+            await t2
+            await asyncio.wait_for(o.reply_task, 3)
+            self.assertEqual(o.user_turns, {r1.turn: "What is in the logs? and the errors too"})
+            self.assertEqual(o.c.brain.calls[-1][0], "What is in the logs? and the errors too")
+        asyncio.run(go())
+
+    def test_out_of_order_finals_without_words_play_the_held_reply(self):
+        async def go():
+            o, log = make_resume([], brain_delay=0.05, hold_max_ms=0.0)
+            o.c.stt = DelaySTT([("What is in the logs?", 0), ("", 0.2), ("", 0)])
+            o._on_speech_start(); o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r1 = o.reply
+            o._on_speech_start(); o.in_user_turn = False
+            t2 = asyncio.ensure_future(o._handle_turn(o.label, o.gen))
+            await asyncio.sleep(0.02)
+            o._on_speech_start(); o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            self.assertIsNotNone(r1.held)
+            await t2
+            self.assertIsNone(r1.held)               # both segments had no words: it plays
+            await asyncio.wait_for(o.reply_task, 3)
+            self.assertTrue(r1.content_started)
+            self.assertEqual(len(o.c.brain.calls), 1)
+        asyncio.run(go())
+
+    def test_hum_final_keeps_the_held_reply(self):
+        for hum in ["Hmm.", "Mm.", "Mmm.", "Mhm.", "Ah.", "Oh.", "Um."]:
+            with self.subTest(hum=hum):
+                async def go():
+                    o, log = make_resume(["What are you doing?", hum], brain_delay=0.05, hold_max_ms=200.0)
+                    o._on_speech_start(); o.in_user_turn = False
+                    await o._handle_turn(o.label, o.gen)
+                    r = o.reply
+                    o._on_speech_start()
+                    o._on_interim(hum.rstrip("."))
+                    o.clock.advance(SR)
+                    await asyncio.sleep(0.6)
+                    self.assertTrue(r.audio_started)  # a hum is no words: released at the cap
+                    o.in_user_turn = False
+                    await o._handle_turn(o.label, o.gen)
+                    await o.reply_task
+                    self.assertEqual(len(o.c.brain.calls), 1)
+                    self.assertEqual(o.c.brain.cancelled, 0)
+                asyncio.run(go())
+
+    def test_announcement_waits_for_a_pending_final(self):
+        # A released reply is cut by a barge-in on its own segment; that segment's final ('') is slow.
+        # The announcement must not take the conversation (and the interrupt note) in that gap.
+        async def go():
+            o, log = make_resume([], brain_delay=0.05, hold_max_ms=200.0)
+            o.c.stt = DelaySTT([("What are you doing?", 0), ("", 1.2)])
+            o._on_speech_start(); o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            o._on_speech_start(); o._on_interim("")
+            o.clock.advance(SR)
+            while not r.content_started:
+                await asyncio.sleep(0.01)
+            o._barge_in()
+            self.assertIs(o.cut_released, r)
+            a = o.announce("[Task 5 finished.]")
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            await asyncio.sleep(0.1)
+            a.cancel()
+            calls = o.c.brain.calls
+            self.assertEqual(calls[1][0], "What are you doing?")      # re-asked first, with the cut
+            self.assertIsNotNone(calls[1][1])
+            self.assertIn("cut_reasked", [e.extra.get("decision") for e in log.events if e.event == "x_resume"])
+            if o.reply_task:
+                o.reply_task.cancel()
+        asyncio.run(go())
+
+    def test_keepalive_made_before_a_hold_waits_for_it(self):
+        class SignalTTS(FakeTTS):
+            def __init__(self, delay):
+                super().__init__(delay)
+                self.started = asyncio.Event()
+
+            async def synthesize(self, text):
+                if text in KEEPALIVE:
+                    self.started.set()
+                async for p in super().synthesize(text):
+                    yield p
+
+        async def go():
+            log = EventLog(Clock())
+            audio = FakeAudio(log)
+            tts = SignalTTS(0.3)
+            c = Components(endpointer=Nop(), stt=FakeSTT("Run the tests."), brain=FakeBrain("All passed.", delay=3.0),
+                           tts=tts, bargein=Nop(), turntaking=TurnTaking({"fillers": False}))
+            o = Orchestrator(audio, log, c, {"orchestrator": {"keepalive_after_ms": 100, "keepalive_every_ms": 10000}})
+
+            async def tick():
+                while True:
+                    await asyncio.sleep(0.02)
+                    audio.clock.advance(FRAME)
+            t = asyncio.ensure_future(tick())
+            o._on_speech_start(); o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            await asyncio.wait_for(tts.started.wait(), 2)
+            o._on_speech_start()                     # the user goes on while the line is made
+            self.assertIsNotNone(r.held)
+            await asyncio.sleep(0.4)
+            self.assertFalse(r.audio_started)
+            self.assertFalse(o.sink.is_playing())
+            self.assertFalse(o._assistant_holds_floor())
+            t.cancel()
+            o.reply_task.cancel()
+        asyncio.run(go())
+
+    def test_own_final_does_not_settle_a_later_click(self):
+        # The early filler plays; a 20 ms click opens a barge-in episode; the question's final lands.
+        from live.bargein import BargeIn
+        rng = np.random.default_rng(0)
+
+        def quiet():
+            return (rng.standard_normal(FRAME) * 10).astype(np.int16)
+
+        def click():
+            t = np.arange(FRAME) / SR
+            return (np.sin(2 * np.pi * 150 * t) * 32768 * 10 ** (-30 / 20) * 1.414).astype(np.int16)
+
+        async def go():
+            o, log = make(brain_delay=1.5)
+            o.c.bargein = bi = BargeIn()
+            o.c.stt = SlowSTT("What is going on with task two?")
+            o.c.endpointer = FakeEndpointer("What is going on with task two?")
+            for _ in range(100):                     # the noise floor, before the turn ends
+                bi.feed(quiet(), o.clock.ms, o._assistant_holds_floor())
+                o.clock.advance(FRAME)
+            o._on_speech_start(); o._on_interim("What is going on")
+            await asyncio.sleep(0.1)
+            o.in_user_turn = False
+            o._early_filler(o.label)
+            asyncio.ensure_future(o._handle_turn(o.label, o.gen))
+            await asyncio.sleep(0)
+            for i in range(40):
+                o.clock.advance(FRAME)
+                if bi.feed(click() if i == 3 else quiet(), o.clock.ms, o._assistant_holds_floor()) == "barge_in":
+                    o._barge_in()
+                await asyncio.sleep(0.02)
+            self.assertFalse([e for e in log.events if e.event == "barge_in_detected"], bi.last)
+            self.assertIsNotNone(o.reply)
+            self.assertEqual(o.c.brain.cancelled, 0)
+            o.reply_task.cancel()
+        asyncio.run(go())
 
 
 if __name__ == "__main__":

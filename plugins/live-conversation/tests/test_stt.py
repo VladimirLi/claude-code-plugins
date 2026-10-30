@@ -253,6 +253,27 @@ class TestLateFinalize(unittest.TestCase):
     def _burst(self, s, events):
         s.on_event = lambda name, fields: events.append((name, fields))
 
+    def test_late_final_with_interims_on_stops_at_the_cut(self):
+        # live default interim_ms=1000: the first loud frames of the next utterance send an interim
+        # on [seg_start, now) before begin() freezes the ended one; it must not be the late final
+        for pause, backlog in ((50, 3), (60, 10)):
+            with self.subTest(pause=pause, backlog=backlog):
+                async def go():
+                    s = FakeSTT({"interim_ms": 1000})
+                    await feed(s, [QUIET] * 20)
+                    s.begin()
+                    await feed(s, [LOUD] * 40 + [QUIET] * pause)
+                    await asyncio.sleep(0.1)
+                    first = asyncio.create_task(s.finalize())
+                    for f in [LOUD] * backlog:
+                        s.feed(f)
+                    s.begin()
+                    await feed(s, [LOUD] * 20 + [QUIET] * 10)
+                    await asyncio.sleep(0.1)
+                    await s.finalize()
+                    return await first
+                self.assertEqual(run(go()), "w40")
+
     def test_begin_before_finalize_runs_keeps_the_ended_turn(self):
         async def go():
             events = []

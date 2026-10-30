@@ -9,8 +9,9 @@ Interface:
                     now, the decision follows ("barge_in" or "resume")
         "resume"    the sound was a backchannel ("mm-hmm") or noise: carry on
         None        nothing to do
-    bi.on_transcript(text)   final STT text: settles an open episode (backchannel words
-                             resume, anything else barges in) on the next feed()
+    bi.on_transcript(text, end_ms=None)   final STT text: settles an open episode (backchannel
+                             words resume, anything else barges in) on the next feed(); not
+                             an episode that opened after end_ms (the text's speech had ended)
     bi.reset()
     bi.last                  info on the last decision: kind, reason, onset_ms, t_ms
 
@@ -163,8 +164,12 @@ class BargeIn:
         self.fired = False
         self._pending: Optional[str] = None
 
-    def on_transcript(self, text: str) -> None:
+    def on_transcript(self, text: str, end_ms: Optional[float] = None) -> None:
+        """`end_ms`: when the transcribed speech had ended. An episode that opened after that is
+        other sound (a click while the reply's filler plays), not the speech of this text."""
         if not self.active or self.fired:
+            return
+        if end_ms is not None and self.onset_ms is not None and self.onset_ms > end_ms:
             return
         # no words: noise or echo the STT heard nothing in (live session: 1 of 2 false barge-ins)
         words = re.search(r"\w", text or "")
