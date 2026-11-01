@@ -90,6 +90,16 @@ DEFAULTS = {
 }
 
 
+async def close_all(log: EventLog, c) -> None:
+    """Close brain, STT and TTS, each even if another one raised (its claude processes, the
+    microphone and the speech model must not be left running)."""
+    for name in ("brain", "stt", "tts"):
+        try:
+            await getattr(c, name).close()
+        except Exception as e:
+            log.emit("x_task_error", None, where=f"{name} close", error=f"{type(e).__name__}: {e}"[:300])
+
+
 @dataclass
 class Components:
     endpointer: Endpointer
@@ -255,15 +265,19 @@ class Orchestrator:
             t.cancel()
         for t in self.pcm.values():
             t.cancel()
-        await self.c.brain.close()
-        await self.c.stt.close()
-        await self.c.tts.close()
+        await close_all(self.log, self.c)
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
         self.tasks.add(t)
-        t.add_done_callback(self.tasks.discard)
+        t.add_done_callback(self._task_done)
         return t
+
+    def _task_done(self, t: asyncio.Task) -> None:
+        self.tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            e = t.exception()
+            self.log.emit("x_task_error", None, error=f"{type(e).__name__}: {e}"[:300])
 
     # -- mic loop ------------------------------------------------------------
     def _assistant_holds_floor(self) -> bool:

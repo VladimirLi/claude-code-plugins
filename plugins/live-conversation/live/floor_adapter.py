@@ -135,9 +135,8 @@ class FloorAdapter:
             self._on(F.End())                      # the session ended mid-reply (wall cap, Ctrl-C)
         for t in list(self.tasks):
             t.cancel()
-        await self.c.brain.close()
-        await self.c.stt.close()
-        await self.c.tts.close()
+        from .orchestrator import close_all
+        await close_all(self.log, self.c)
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)

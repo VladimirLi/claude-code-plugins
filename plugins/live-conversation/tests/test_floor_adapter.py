@@ -275,6 +275,36 @@ class TestAdapterReview(unittest.TestCase):
         self.assertIn("probably false: 0", out)
         self.assertIn("plugin code", out)
 
+    def test_close_closes_every_component_even_if_one_raises(self):
+        for flag in (True, False):
+            o, log = make(Script(end_ms=200), {"orchestrator": {"floor": flag}})
+            closed = []
+
+            async def boom():
+                raise RuntimeError("brain would not stop")
+
+            async def mark(name):
+                closed.append(name)
+            o.c.brain.close = boom
+            o.c.stt.close = lambda: mark("stt")
+            o.c.tts.close = lambda: mark("tts")
+            asyncio.run(o.close())
+            self.assertEqual(closed, ["stt", "tts"], f"floor={flag}")
+            self.assertEqual([e.extra["where"] for e in events(log, "x_task_error")], ["brain close"])
+
+    def test_old_path_logs_task_exceptions(self):
+        o, log = make(Script(), {"orchestrator": {"floor": False}})
+
+        async def go():
+            async def fails():
+                raise ValueError("planted")
+            t = o._spawn(fails())
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return t
+        asyncio.run(go())
+        self.assertIn("ValueError: planted", [e.extra["error"] for e in events(log, "x_task_error")])
+
     def test_session_end_mid_reply_ends_it(self):
         s = Script(brain_ms=300, end_ms=2600)
         s.replies = {"": "One two three four five six seven eight nine ten."}

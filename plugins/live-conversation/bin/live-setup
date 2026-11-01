@@ -24,7 +24,7 @@ WANT="$(stamp)"
 ready() { [ -x "$VENV/bin/python" ] && [ "$(cat "$VENV/.live-stamp" 2>/dev/null)" = "$WANT" ]; }
 
 if [ "${1:-}" = "--check" ]; then
-  ready && command -v rec >/dev/null && exit 0
+  ready && command -v rec >/dev/null && command -v play >/dev/null && exit 0
   exit 1
 fi
 
