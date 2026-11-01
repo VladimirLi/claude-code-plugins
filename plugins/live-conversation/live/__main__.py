@@ -30,10 +30,17 @@ async def main() -> None:
     ap.add_argument("--config", help="JSON file with per-module config sections")
     ap.add_argument("--run-dir", help="folder shared with the /live mod (task handoff, pid)")
     a = ap.parse_args()
+    os.umask(0o077)               # recordings, task files, logs: this user's only
     cfg = json.load(open(a.config)) if a.config else {}
     cfg.setdefault("brain", {})["cwd"] = a.cwd
     if a.run_dir:
-        os.makedirs(a.run_dir, exist_ok=True)
+        try:
+            # refuse a run folder (or its parent, under a /tmp fallback) another user made first
+            tasks.private_dir(os.path.dirname(os.path.abspath(a.run_dir)))
+            tasks.private_dir(a.run_dir)
+        except PermissionError as e:
+            print(f"live: {e}", file=sys.stderr, flush=True)
+            sys.exit(2)
         with open(os.path.join(a.run_dir, "daemon.pid"), "w") as f:
             f.write(str(os.getpid()))
         cmd = tasks.command(sys.executable, os.path.join(PLUGIN, "bin", "live-task"), a.run_dir)

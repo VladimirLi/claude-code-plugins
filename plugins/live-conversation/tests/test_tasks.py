@@ -47,6 +47,60 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(cmd, "'/a b/python' '/a b/bin/live-task' --run-dir '/tmp/run dir'")
 
 
+class TestPrivateDirs(unittest.TestCase):
+    def test_task_folder_and_files_are_private(self):
+        old = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                run = os.path.join(tmp, "run")
+                tasks.request(run, "do it")
+                d = os.path.join(run, "tasks")
+                self.assertEqual(os.stat(run).st_mode & 0o777, 0o700)
+                self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+                self.assertEqual(os.stat(os.path.join(d, "1.request.json")).st_mode & 0o777, 0o600)
+        finally:
+            os.umask(old)
+
+    def test_refuses_a_symlink_or_another_users_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "real")
+            os.mkdir(real)
+            link = os.path.join(tmp, "link")
+            os.symlink(real, link)
+            with self.assertRaises(PermissionError):
+                tasks.private_dir(link)
+            uid = os.getuid
+            try:
+                os.getuid = lambda: uid() + 1          # as if another user had made it
+                with self.assertRaises(PermissionError):
+                    tasks.private_dir(real)
+            finally:
+                os.getuid = uid
+
+    def test_daemon_refuses_a_foreign_run_folder(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "real")
+            os.mkdir(real)
+            link = os.path.join(tmp, "link")
+            os.symlink(real, link)
+            plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            r = subprocess.run([sys.executable, "-m", "live", "--run-dir", link], cwd=plugin,
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("is not a folder of this user", r.stderr)
+
+
+class TestSetupCheck(unittest.TestCase):
+    def test_check_needs_rec_and_play(self):
+        # setup installs sox when either tool is missing; --check must not say ready without both
+        plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = open(os.path.join(plugin, "bin", "live-setup")).read()
+        check = src[src.index('if [ "${1:-}" = "--check" ]'):].split("fi", 1)[0]
+        self.assertIn("command -v rec", check)
+        self.assertIn("command -v play", check)
+
+
 class TestBridge(unittest.TestCase):
     def test_handoff_event_then_result(self):
         with tempfile.TemporaryDirectory() as d:
@@ -72,6 +126,40 @@ class TestBridge(unittest.TestCase):
             prompt = tasks.result_prompt(res[0])
             self.assertTrue(prompt.startswith("[Task 1 finished."))
             self.assertIn("tests pass", prompt)
+
+    def test_a_failing_result_or_poll_is_logged_and_polling_goes_on(self):
+        async def go(d, log):
+            b = tasks.TaskBridge(d, log, poll_s=0.01)
+            polls = {"n": 0}
+            real_poll = b.poll
+
+            def poll():
+                polls["n"] += 1
+                if polls["n"] == 1:
+                    raise OSError("disk hiccup")
+                return real_poll()
+            b.poll = poll
+            seen = []
+
+            def on_result(res):
+                seen.append(res["task"])
+                if len(seen) == 1:
+                    raise ValueError("announce failed")
+            run = asyncio.ensure_future(b.run(on_result))
+            for n in (1, 2):
+                tasks.request(d, f"task {n}")
+                await asyncio.sleep(0.05)
+                with open(os.path.join(d, "tasks", f"{n}.result.json"), "w") as f:
+                    json.dump({"task": n, "reason": "answer", "answer": "ok"}, f)
+                await asyncio.sleep(0.05)
+            run.cancel()
+            return seen
+        with tempfile.TemporaryDirectory() as d:
+            log = EventLog(Clock())
+            seen = asyncio.run(go(d, log))
+            self.assertEqual(seen, [1, 2])                       # the second still came through
+            errors = [e.extra["where"] for e in log.events if e.event == "x_task_error"]
+            self.assertEqual(errors, ["task poll", "task result"])
 
     def test_result_prompt_aborted_and_long(self):
         p = tasks.result_prompt({"task": 3, "reason": "aborted", "text": "x", "answer": "y " * 5000})

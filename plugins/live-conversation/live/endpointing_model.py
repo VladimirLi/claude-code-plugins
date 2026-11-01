@@ -21,6 +21,7 @@ import hashlib
 import math
 import os
 import struct
+import sys
 import urllib.request
 from typing import Optional
 
@@ -37,11 +38,36 @@ N_SECONDS = 8
 
 
 # -- model file -------------------------------------------------------------------
+_checked: set = set()            # cached files whose sha256 matched, this process
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
 def model_path(download: bool = True) -> Optional[str]:
-    """Local path of the model, downloading it once if needed. None if unavailable."""
-    p = os.environ.get("LIVE_SMART_TURN_MODEL") or os.path.join(CACHE_DIR, MODEL_FILE)
+    """Local path of the model, downloading it once if needed. None if unavailable.
+
+    The cached file is checked against the pinned sha256 once per process: a corrupted or
+    replaced file is deleted and downloaded again (or None without download). A file named by
+    LIVE_SMART_TURN_MODEL is the user's choice: used as it is, with a note that it is unchecked."""
+    override = os.environ.get("LIVE_SMART_TURN_MODEL")
+    if override:
+        if override not in _checked:
+            _checked.add(override)
+            sys.stderr.write(f"live: LIVE_SMART_TURN_MODEL={override} is used unverified "
+                             "(not checked against the pinned sha256)\n")
+        return override if os.path.exists(override) else None
+    p = os.path.join(CACHE_DIR, MODEL_FILE)
     if os.path.exists(p):
-        return p
+        if p in _checked or _sha256(p) == MODEL_SHA256:
+            _checked.add(p)
+            return p
+        os.remove(p)                                   # corrupted or replaced: never loaded
     if not download:
         return None
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -58,6 +84,7 @@ def model_path(download: bool = True) -> Optional[str]:
         os.remove(tmp)
         raise RuntimeError("smart-turn model checksum mismatch")
     os.replace(tmp, p)
+    _checked.add(p)
     return p
 
 

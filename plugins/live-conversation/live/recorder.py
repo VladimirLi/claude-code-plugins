@@ -29,6 +29,7 @@ from typing import Optional
 import numpy as np
 
 from .events import SR, Event
+from .tasks import private_dir, private_file
 
 PLUGIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -51,13 +52,16 @@ def _git_rev() -> str:
 class Recorder:
     def __init__(self, path: str, cwd: str, cfg: dict) -> None:
         self.path = path
-        os.makedirs(path, exist_ok=True)
+        # the user's voice and what was said: only this user may read it (0700 folders, 0600 files)
+        private_dir(os.path.dirname(path))
+        private_dir(path)
         self.t0 = time.time()
-        with open(os.path.join(path, "session.json"), "w") as f:
+        with private_file(os.path.join(path, "session.json")) as f:
             json.dump({"start_wall": self.t0, "cwd": cwd, "plugin_rev": _git_rev(), "pid": os.getpid(),
                        "config": cfg}, f, indent=1, default=str)
-        self._events = open(os.path.join(path, "events.jsonl"), "a", buffering=1)
-        self._wav = wave.open(os.path.join(path, "audio.wav"), "wb")
+        self._events = private_file(os.path.join(path, "events.jsonl"), "a")
+        self._wavf = private_file(os.path.join(path, "audio.wav"), "wb")
+        self._wav = wave.open(self._wavf, "wb")
         self._wav.setnchannels(2)
         self._wav.setsampwidth(2)
         self._wav.setframerate(SR)
@@ -76,6 +80,7 @@ class Recorder:
         d = e.to_json()
         d["t_wall"] = round(time.time(), 3)
         self._events.write(json.dumps(d, default=str) + "\n")
+        self._events.flush()
 
     def audio(self, mic: np.ndarray, out: np.ndarray) -> None:
         if self._wav is None:
@@ -103,6 +108,7 @@ class Recorder:
         if self._wav is not None:
             try:
                 self._wav.close()
+                self._wavf.close()                 # wave does not close a file it was handed
             except Exception:
                 pass
             self._wav = None

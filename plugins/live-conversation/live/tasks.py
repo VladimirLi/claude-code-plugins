@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import time
 from typing import Callable, Optional
 
@@ -37,10 +38,26 @@ _NAME = re.compile(r"^(\d+)\.(request|handed|result|done)\.json$")
 _ORDER = {"request": 0, "handed": 1, "result": 2, "done": 3}
 
 
+def private_dir(path: str) -> str:
+    """Make `path` (and missing parents) a folder only this user can open: 0700, owned by us,
+    not a symlink. Raises PermissionError for one that exists and is someone else's."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise PermissionError(f"{path} is not a folder of this user")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(path, 0o700)
+    return path
+
+
+def private_file(path: str, mode: str = "w"):
+    """Open a file only this user can read (0600), whatever the umask."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if "a" in mode else os.O_TRUNC)
+    return open(os.open(path, flags, 0o600), mode)
+
+
 def _dir(run_dir: str) -> str:
-    d = os.path.join(run_dir, "tasks")
-    os.makedirs(d, exist_ok=True)
-    return d
+    return private_dir(os.path.join(private_dir(run_dir), "tasks"))
 
 
 def _scan(d: str) -> dict[int, tuple[str, str]]:
@@ -74,7 +91,7 @@ def request(run_dir: str, text: str) -> int:
     n = max(_scan(d), default=0) + 1
     try:
         while True:
-            with open(tmp, "w") as f:
+            with private_file(tmp) as f:
                 json.dump({"task": n, "text": text, "t": time.time()}, f)
             try:
                 os.link(tmp, os.path.join(d, f"{n}.request.json"))   # atomic, fails if taken
@@ -131,12 +148,20 @@ class TaskBridge:
         return results
 
     async def run(self, on_result: Callable[[dict], None]) -> None:
+        """Poll until cancelled. A failed poll or result handler is logged and polling goes on:
+        one bad result must not stop every later handoff."""
         while True:
             try:
-                for res in self.poll():
+                results = self.poll()
+            except OSError as e:
+                self.log.emit("x_task_error", None, where="task poll", error=f"{type(e).__name__}: {e}"[:300])
+                results = []
+            for res in results:
+                try:
                     on_result(res)
-            except OSError:
-                pass
+                except Exception as e:
+                    self.log.emit("x_task_error", None, where="task result", task=res.get("task"),
+                                  error=f"{type(e).__name__}: {e}"[:300])
             await asyncio.sleep(self.poll_s)
 
 

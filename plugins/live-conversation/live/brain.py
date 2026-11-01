@@ -408,6 +408,27 @@ class _Turn:
         self.q.put_nowait(None)
 
 
+# The voice brain runs Bash without asking, so it must not see this process's secrets (the Azure
+# keys above all). It gets the environment minus anything that looks like a secret, except the
+# variables `claude` itself signs in with.
+_SECRET = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.I)
+_CLAUDE_AUTH = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+
+
+def brain_env(env: Optional[dict] = None) -> dict:
+    """The environment for `claude -p`: no AZURE_*, nothing named like a key, token, secret,
+    password or credential, but claude's own sign-in (and, for Bedrock or Vertex users, the
+    cloud credentials claude needs)."""
+    env = dict(os.environ if env is None else env)
+    keep = set(_CLAUDE_AUTH)
+    if env.get("CLAUDE_CODE_USE_BEDROCK"):
+        keep |= {k for k in env if k.startswith("AWS_")}
+    if env.get("CLAUDE_CODE_USE_VERTEX"):
+        keep |= {"GOOGLE_APPLICATION_CREDENTIALS"}
+    return {k: v for k, v in env.items()
+            if k in keep or (not k.upper().startswith("AZURE_") and not _SECRET.search(k))}
+
+
 class _Session:
     """One persistent `claude -p` stream-json process: one conversation."""
 
@@ -430,7 +451,7 @@ class _Session:
 
     async def start(self, warm: bool) -> None:
         self.proc = await asyncio.create_subprocess_exec(
-            *self.argv, cwd=self.cwd,
+            *self.argv, cwd=self.cwd, env=brain_env(),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, limit=1 << 24)
         self._reader = asyncio.create_task(self._read())

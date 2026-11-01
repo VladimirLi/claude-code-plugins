@@ -13,7 +13,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from live.brain import Brain, Interrupted, _Cleaner, spoken  # noqa: E402
+from live.brain import Brain, Interrupted, _Cleaner, brain_env, spoken  # noqa: E402
 from live.tts import Chunker  # noqa: E402
 
 FAKE = os.path.join(HERE, "fake_claude.py")
@@ -52,6 +52,15 @@ class TestSpoken(unittest.TestCase):
 
 
 class TestArgv(unittest.TestCase):
+    def test_tools_and_isolation_flags(self):
+        argv = Brain({"cwd": "/x"})._argv()
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Grep,Glob,Bash")
+        self.assertEqual(argv[argv.index("--allowedTools") + 1], "Read,Grep,Glob,Bash")
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+        self.assertIn("--strict-mcp-config", argv)
+        for bypass in ("--dangerously-skip-permissions", "--permission-mode", "--allow-dangerously-skip-permissions"):
+            self.assertNotIn(bypass, argv)
+
     def test_flags(self):
         b = Brain({"cwd": "/x/proj"})
         argv = b._argv()
@@ -61,6 +70,50 @@ class TestArgv(unittest.TestCase):
         sp = argv[argv.index("--system-prompt") + 1]
         self.assertIn("/x/proj", sp)
         self.assertIn("markdown", sp)
+
+
+class TestEnv(unittest.TestCase):
+    """The brain runs Bash without asking: it must not see the daemon's secrets."""
+
+    def test_scrub(self):
+        env = brain_env({"HOME": "/h", "PATH": "/p", "USER": "u", "LANG": "C", "TMPDIR": "/t",
+                         "CLAUDE_CONFIG_DIR": "/c", "AZURE_OPENAI_API_KEY": "k", "AZURE_SPEECH_REGION": "r",
+                         "GITHUB_TOKEN": "t", "my_secret": "s", "DB_PASSWORD": "p", "AWS_SECRET_ACCESS_KEY": "a",
+                         "ANTHROPIC_API_KEY": "claude", "CLAUDE_CODE_OAUTH_TOKEN": "claude"})
+        self.assertEqual(sorted(env), ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR",
+                                       "HOME", "LANG", "PATH", "TMPDIR", "USER"])
+
+    def test_bedrock_keeps_its_aws_credentials(self):
+        env = brain_env({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_SECRET_ACCESS_KEY": "a", "AZURE_X_KEY": "z"})
+        self.assertIn("AWS_SECRET_ACCESS_KEY", env)
+        self.assertNotIn("AZURE_X_KEY", env)
+
+    def test_the_process_sees_no_azure_key(self):
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "env.json")
+        saved = {k: os.environ.get(k) for k in ("AZURE_OPENAI_API_KEY", "FAKE_ENV_OUT")}
+        os.environ["AZURE_OPENAI_API_KEY"] = "secret"
+        os.environ["FAKE_ENV_OUT"] = out
+        try:
+            async def go():
+                b = fake_brain(warm=False)
+                await b.start()
+                for _ in range(100):
+                    if os.path.exists(out):
+                        break
+                    await asyncio.sleep(0.02)
+                await b.close()
+            run(go())
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        seen = json.load(open(out))
+        self.assertNotIn("AZURE_OPENAI_API_KEY", seen)
+        self.assertEqual(seen.get("HOME"), os.environ.get("HOME"))
+        self.assertEqual(seen.get("PATH"), os.environ.get("PATH"))
 
 
 def fake_brain(**cfg):

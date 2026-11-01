@@ -28,6 +28,9 @@ def next_delay():
 
 
 SLOT, DELAY = next_delay()
+if os.environ.get("FAKE_ENV_OUT"):                 # a test reads the environment this process got
+    with open(os.environ["FAKE_ENV_OUT"], "w") as f:
+        json.dump(dict(os.environ), f)
 # FAKE_THINK: comma list of ms, per process like FAKE_DELAYS: a thinking block this long before the text
 _THINK = [int(x) for x in os.environ.get("FAKE_THINK", "0").split(",")]
 THINK = _THINK[SLOT % len(_THINK)] / 1000.0
