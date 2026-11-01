@@ -256,6 +256,25 @@ class TestAdapterReview(unittest.TestCase):
         first = events(log, "first_reply_audio")[0].t_ms
         self.assertIn(f"{round(first - 1100)}", row.replace(" ms", ""))   # from the stop at 1100 ms
 
+    def test_live_review_reads_a_long_turns_late_final(self):
+        # replay of 20261030-110521, 217.8 s: a 44 s turn's final came 43 s after the pause
+        import subprocess
+        import tempfile
+        d = tempfile.mkdtemp()
+        rows = [{"t_ms": 0.0, "event": "session_start", "turn": None},
+                {"t_ms": 1000.0, "event": "x_bargein", "turn": None, "decision": "barge_in", "reason": "burst",
+                 "onset_ms": 900.0},
+                {"t_ms": 1000.0, "event": "barge_in_detected", "turn": 1},
+                {"t_ms": 44000.0, "event": "final_transcript", "turn": 2,
+                 "text": "but i don't think you should look through the plugin code"}]
+        with open(os.path.join(d, "events.jsonl"), "w") as f:
+            f.write("\n".join(json.dumps(r) for r in rows) + "\n")
+        plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out = subprocess.run([sys.executable, os.path.join(plugin, "bin", "live-review"), d],
+                             capture_output=True, text=True).stdout
+        self.assertIn("probably false: 0", out)
+        self.assertIn("plugin code", out)
+
     def test_session_end_mid_reply_ends_it(self):
         s = Script(brain_ms=300, end_ms=2600)
         s.replies = {"": "One two three four five six seven eight nine ten."}

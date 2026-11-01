@@ -149,7 +149,10 @@ def review(d):
                 why = e
                 break
         onset = (why or {}).get("onset_ms") or t
-        nxt = at("final_transcript", t, t + 4000)
+        # what the user said: the first final after the stop, up to the next barge-in (a long turn's
+        # final comes when it ends, 40 s later in session 20261030-110521, not within 4 s)
+        later = [x["t_ms"] for x in bis[i + 1:]]
+        nxt = at("final_transcript", t, min([t + 60000] + later))
         said = (nxt or {}).get("text", "").strip()
         mic_db = spk_db = corr = lag = None
         if audio is not None:
