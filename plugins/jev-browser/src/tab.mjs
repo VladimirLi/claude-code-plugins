@@ -3,6 +3,8 @@
 // at fresh coordinates after a hit test.
 import { INSTALL, VERSION, MUTATION_WATCH } from "./page.mjs";
 import { dialogRisky, SUBMIT_GUARD, formCollects } from "./safety.mjs";
+// JEVB_FOCUS=1: new session windows open in front, so a person can watch Jev work
+const FOCUS = /^(1|true)$/i.test(process.env.JEVB_FOCUS || "");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
@@ -78,7 +80,7 @@ export class Tab {
   run(fn) { const p = this.chain.then(fn, fn); this.chain = p.catch(() => {}); return p; }
 
   async create() {
-    const { targetId } = await this.cdp.send("Target.createTarget", { url: "about:blank", newWindow: true, ...(this.contextId ? { browserContextId: this.contextId } : {}) });
+    const { targetId } = await this.cdp.send("Target.createTarget", { url: "about:blank", newWindow: true, ...(FOCUS ? { background: false } : {}), ...(this.contextId ? { browserContextId: this.contextId } : {}) });
     await this.attach(targetId);
   }
 

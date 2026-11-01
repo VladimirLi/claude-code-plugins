@@ -48,6 +48,12 @@
       "description": "Run the dedicated Chrome with visible windows (to log in by hand). Takes effect when the daemon next starts (jevb stop).",
       "default": false
     },
+    "qa_sites": {
+      "type": "string",
+      "title": "QA sites (no confirmation pauses)",
+      "description": "Comma-separated hosts of your own test sites, e.g. app.staging.example.com or staging.example.com (covers subdomains). On these pages Jev never pauses for confirmation: send, submit, delete and risky dialogs go through, as if allow_irreversible were set. Checked before each action, so leaving the site turns the pauses back on. Empty: off.",
+      "default": ""
+    },
     "haiku_loop": {
       "type": "boolean",
       "title": "Haiku outer loop",
@@ -65,7 +71,8 @@
         "JEVB_HEADED": "${user_config.headed}",
         "JEVB_ATTACH": "${user_config.use_my_chrome}",
         "JEVB_EXT": "${user_config.use_extension}",
-        "JEVB_HAIKU": "${user_config.haiku_loop}"
+        "JEVB_HAIKU": "${user_config.haiku_loop}",
+        "JEVB_QA_SITES": "${user_config.qa_sites}"
       }
     }
   }

@@ -24,6 +24,8 @@ export const haikuOn = (args = {}) => (args.haiku != null ? args.haiku === true 
 // Statuses that end the outer loop at once and go back to the caller as they are.
 const HAND_BACK = new Set(["needs_confirmation", "needs_login", "needs_human"]);
 const MET = new Set(["done", "likely_done"]);
+// the repeat checks' words for a stop that may be a met goal
+const MAYBE_DONE = /\bthe goal may (already )?be done\b/;
 // a goal with several steps ("Log in, add X and check out"): not_found on one part may be a plan problem
 export const MULTI_STEP = /,|;|\b(and|then)\b/i;
 // a field whose text Haiku must never write
@@ -194,9 +196,13 @@ export async function outerLoop({ goal, values = {}, first, run, ask, page, go, 
       outcome = reply.stop; why = reply.why;
       if (!steps.length && !last) return fallback();
       const s = last.data?.status;
-      // Haiku never upgrades a status: "done" keeps the last do's own status; a give-up after a
-      // met sub-goal is not a met goal
-      if (reply.stop === "done") return relabel(last, s, null, [`haiku: stopped, goal met (${why || "no reason given"})`, ...trail().slice(1)], meta());
+      // Haiku never upgrades a status to done: "done" keeps the last do's own status, except a
+      // stuck that Jev's repeat check already called maybe-done (pypi: the release history was
+      // open and Haiku read the date) becomes likely_done; a give-up after a met sub-goal is not a met goal
+      if (reply.stop === "done") {
+        const maybe = s === "stuck" && MAYBE_DONE.test(last.data?.info ?? String(last.text).split("\n").find((l) => l.startsWith("info: ")) ?? "");
+        return relabel(last, maybe ? "likely_done" : s, maybe ? "Jev stopped on a repeat that may mean the goal is done, and Haiku sees it met; verify with check or observe" : null, [`haiku: stopped, goal met (${why || "no reason given"})`, ...trail().slice(1)], meta());
+      }
       return relabel(last, MET.has(s) && steps.length ? "stuck" : s, MET.has(s) && steps.length ? `the sub-goals ran but Haiku sees the goal as not done: ${why}` : null, [`haiku: gave up (${why || "no reason given"})`, ...trail().slice(1)], meta());
     }
     if (reply.read) {

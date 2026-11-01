@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { irreversibleRule, gateRule, SUBMIT_GUARD, dialogRisky, redactValues, scrub, fence, secretsOf, formCollects } from "../src/safety.mjs";
+import { irreversibleRule, gateRule, SUBMIT_GUARD, dialogRisky, redactValues, scrub, fence, secretsOf, formCollects, qaSite } from "../src/safety.mjs";
 import { pageDiff, renderPage } from "../src/format.mjs";
 
 const page = (url, text, elements = []) => ({ url, title: "", text, elements, dialogs: [] });
@@ -111,4 +111,15 @@ test("render puts viewport elements first and fences the page", () => {
   const out = renderPage(page("u", "t", [{ id: 1, tag: "a", text: "far", off: "below" }, { id: 2, tag: "a", text: "near" }]));
   assert.ok(out.indexOf("[2]") < out.indexOf("[1]"));
   assert.match(out, /<<<untrusted page content/);
+});
+
+test("QA sites: listed hosts and their subdomains only, http(s) only", () => {
+  const sites = ["staging.example.com"];
+  assert.ok(qaSite("https://app.staging.example.com/flow/1", sites));
+  assert.ok(qaSite("http://staging.example.com/", sites));
+  assert.equal(qaSite("https://example.com/", sites), false);
+  assert.equal(qaSite("https://evil-staging.example.com.attacker.test/", sites), false);
+  assert.equal(qaSite("https://notstaging.example.com/", sites), false);
+  assert.equal(qaSite("data:text/html,x", sites), false);
+  assert.equal(qaSite("https://app.staging.example.com/", []), false);
 });

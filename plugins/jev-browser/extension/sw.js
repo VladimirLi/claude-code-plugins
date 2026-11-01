@@ -159,7 +159,7 @@ export async function handle(m) {
       const ctx = p.browserContextId ? contexts.get(p.browserContextId) : null;
       if (p.browserContextId && !ctx) throw new Error(`unknown browser context ${p.browserContextId}`);
       const incognito = !!ctx;
-      const w = await chrome.windows.create({ url: "about:blank", focused: false, incognito, width: 1280, height: 900 });
+      const w = await chrome.windows.create({ url: "about:blank", focused: p.background === false, incognito, width: 1280, height: 900 });
       const tab = w.tabs?.[0] ?? (await chrome.tabs.query({ windowId: w.id }))[0];
       ours.add(tab.id); ctx?.add(tab.id);
       if (incognito) dirty = true;

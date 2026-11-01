@@ -14,6 +14,10 @@ test("arrivedAt: a link click that landed on the page its link names", () => {
   assert.equal(arrivedAt(page(travel, "Travel | Books"), [click("Travel", travel)]), null);
   assert.equal(arrivedAt(book, [click("Full Moon over Noah’s Ark", travel, { error: "covered" })]), null);
   assert.equal(arrivedAt(book, [click("Full Moon over Noah’s Ark", travel, { tag: "button" })]), null);
+  // a link the goal names, on a page that never repeats its words (example.com's "Learn more")
+  const iana = page("https://www.iana.org/help/example-domains", "Example Domains");
+  assert.ok(arrivedAt(iana, [click("Learn more", "https://example.com/")], "Open the Learn more link"));
+  assert.equal(arrivedAt(iana, [click("Learn more", "https://example.com/")], "Open the IANA page"), null);
   assert.equal(arrivedAt(page("https://x/login", "Sign in"), [click("Pricing", "https://x/")]), null);
   assert.equal(arrivedAt(book, []), null);
 });

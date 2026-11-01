@@ -4,7 +4,7 @@ import { appendFileSync } from "node:fs";
 import { jev, stats } from "./jev.mjs";
 import { KEY_NAMES } from "./tab.mjs";
 import { brief, elementLine, renderPage, renderDiff, pageDiff, diffForJev } from "./format.mjs";
-import { fence, scrub, secretsOf, redactValues, gateRule, dialogRisky, domainAllowed, REDACTED, SECRET_KEY } from "./safety.mjs";
+import { fence, scrub, secretsOf, redactValues, gateRule, dialogRisky, domainAllowed, qaSite, REDACTED, SECRET_KEY } from "./safety.mjs";
 import { haiku, haikuOn, shouldEngage, planFirst, outerLoop, HAIKU_MS, READER, READ_CHARS, PAGE_CHARS, RISKY_LINK } from "./haiku.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -73,7 +73,9 @@ const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
 // title, url or top text carries the link's own name. The page alone rarely proves "the second
 // book listed there" (books: confirm 0.03 on the right book page), but the click Jev chose for
 // the goal landed where its link said. Returns the link name, or null.
-export function arrivedAt(page, history) {
+// goals that go on to send or submit what they type
+const SEND_GOAL = /\b(send|submit|post|publish|save|create)\b/i;
+export function arrivedAt(page, history, goal = "") {
   const last = history.filter((h) => h.action && h.action !== "wait").at(-1);
   if (!last || last.error || last.action !== "click" || !last.name || !/^a$|\[link\]$/.test(last.tag ?? "")) return null;
   if (!last.url || last.url.split("#")[0] === page.url.split("#")[0]) return null;
@@ -81,7 +83,9 @@ export function arrivedAt(page, history) {
   const words = norm(String(last.name).replace(/(\S*)(\.\.\.|…)\s*$/, "")).split(" ").filter(Boolean).slice(0, 6);
   if (!words.length) return null;
   const phrase = ` ${words.join(" ")} `, hay = ` ${norm(`${page.title} ${decodeURIComponent(page.url).replace(/[-_/]/g, " ")} ${page.text.slice(0, 400)}`)} `;
-  return hay.includes(phrase) ? last.name : null;
+  // or the goal itself names the link ("Open the Learn more link": example.com's goes to iana.org,
+  // whose page never says "learn more")
+  return hay.includes(phrase) || ` ${norm(goal)} `.includes(phrase) ? last.name : null;
 }
 // "Scroll down to the customer reviews section": the words naming the place, or null for
 // other goals, goals that go on after the scroll ("... and open it"), and scrolls that load
@@ -245,31 +249,34 @@ export class Agent {
     if (known.length) throw new Error(`unknown or stale element id(s) ${known.join(", ")}; observe again`);
     const results = []; let status = "ok", pending, info, asked = false;
     const url0 = await this.tab.url();
-    if (allow_irreversible) await this.tab.allowSubmits(true);
+    let url = url0, opened = false;
     try {
     for (const [n, a] of actions.entries()) {
       const op = a.op;
+      // allow_irreversible, or a QA site (JEVB_QA_SITES) for the page this action runs on
+      const allow = allow_irreversible || qaSite(url);
+      if (allow !== opened) { await this.tab.allowSubmits(allow); opened = allow; }
       const value = a.value_key != null ? values[a.value_key] : a.value;
       if (a.value_key != null && value === undefined) { status = "error"; results.push({ op, id: a.id, error: `no value with key "${a.value_key}"` }); break; }
       const el = byId.get(Number(a.id));
       const key = a.key || a.value;
-      const focused = !allow_irreversible && needsFocused(op, a.id, key) ? await this.tab.J("focused").catch(() => null) : null;
-      const rule = !allow_irreversible && gateRule(op, el, before, { key, focused });
+      const focused = !allow && needsFocused(op, a.id, key) ? await this.tab.J("focused").catch(() => null) : null;
+      const rule = !allow && gateRule(op, el, before, { key, focused });
       if (rule) { status = "needs_confirmation"; pending = { op, id: a.id, element: brief(el ?? focused), ...(op === "press_key" ? { key } : {}) }; info = `${rule}; repeat with allow_irreversible to do it`; break; }
       // a step that submits a form: Jev's irreversible question, once per call; it can add a
       // pause, never remove one (the code rule above already ran)
-      if (!allow_irreversible && !asked && submitsForm(op, el ?? focused, key)) {
+      if (!allow && !asked && submitsForm(op, el ?? focused, key)) {
         asked = true;
         const p = await this.irreversible(before, `${op === "dblclick" ? "click" : op} ${brief(el ?? focused)}`).catch(() => 0);
         if (p >= 0.6) { status = "needs_confirmation"; pending = { op, id: a.id, element: brief(el ?? focused), ...(op === "press_key" ? { key } : {}) }; info = `Jev rates this form submit as hard to undo (${p.toFixed(2)}); repeat with allow_irreversible to do it`; break; }
       }
-      this.tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
+      this.tab.dialogPolicy = (d) => (allow || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
       this.tab.held = null;
       const since = Date.now();
       try {
         const note = await this.tab.exec({ op, id: a.id != null ? Number(a.id) : undefined, value, key: a.key, to: a.to != null ? Number(a.to) : undefined, direction: a.direction });
         await this.tab.settle({ since });
-        if (!allow_irreversible) await this.tab.takeHeld();
+        if (!allow) await this.tab.takeHeld();
         results.push({ op, id: a.id, ok: true, ...(note ? { note } : {}) });
       } catch (e) {
         results.push({ op, id: a.id, error: e.message.slice(0, 200) }); status = "error"; break;
@@ -280,11 +287,11 @@ export class Agent {
         pending = { op, id: a.id, element: brief(el), ...(op === "press_key" ? { key } : {}) };
         break;
       }
-      const u = await this.tab.url();
+      const u = url = await this.tab.url();
       if (!domainAllowed(u)) { await this.tab.exec({ op: "back" }).catch(() => {}); status = "blocked"; info = `navigation to ${u} is outside JEVB_ALLOWED_DOMAINS`; break; }
       if (u !== url0 && n < actions.length - 1) { info = `the page navigated after action ${n + 1}; the remaining ${actions.length - n - 1} were not run`; break; }
     }
-    } finally { if (allow_irreversible) await this.tab.allowSubmits(false); }
+    } finally { if (opened) await this.tab.allowSubmits(false); }
     const page = await this.tab.snapshot();
     const ev = this.events();
     const navigated = page.url.split("#")[0] !== before.url.split("#")[0];
@@ -530,8 +537,15 @@ export class Agent {
     // dialogs opened by this do's actions: part of what the page showed, for the confirm question
     const dialogs = () => history.filter((h) => h.dialog).map((h) => h.dialog);
     tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
+    let opened = false;
+    try {
     for (let round = 0; round <= limit; round++) {
       page = await tab.snapshot();
+      // allow_irreversible, or a QA site (JEVB_QA_SITES) for the page this round acts on
+      const allow = allow_irreversible || qaSite(page.url);
+      if (allow && !allow_irreversible && !opened) { await tab.allowSubmits(true); opened = true; }
+      else if (!allow && opened) { await tab.allowSubmits(false); opened = false; }
+      tab.dialogPolicy = (d) => (allow || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
       for (const e of this.events()) history.push({ event: e });
       if (page.captcha) { status = "needs_human"; info = "the page shows a captcha or bot check; a person has to solve it"; break; }
       // a scroll goal whose named place was out of view at the start and is in view now: done
@@ -589,7 +603,7 @@ export class Agent {
       // a scroll goal is not met while its named place is out of view, whatever the page has
       // (the kettle page's reviews below the fold got confirm 0.71 after two scrolls)
       const notThere = scrollWords && !inView(page, scrollWords);
-      const arrived = NAV_ANY.test(goal) && arrivedAt(page, history);
+      const arrived = NAV_ANY.test(goal) && arrivedAt(page, history, goal);
       const arrivedInfo = `the last click opened the page its link "${String(arrived).slice(0, 60)}" named, and Jev sees nothing left to do`;
       const confirm = async () => {
         if (conf == null) {
@@ -696,6 +710,12 @@ export class Agent {
       // rarely confirm from the page alone, so hand back as likely_done instead
       const entered = new Set(history.filter((h) => h.value && !h.error && ["type", "upload"].includes(h.action)).map((h) => h.value));
       if (["type", "upload"].includes(act.tool) && act.valueKey && entered.has(act.valueKey) && Object.keys(values).every((k) => entered.has(k))) {
+        // unless the goal also asks to send what was typed and nothing was clicked or submitted
+        // since (a chat builder: "type the description and send it" typed, then wanted to type again)
+        if (SEND_GOAL.test(goal) && !history.slice(history.findLastIndex((h) => h.value)).some((h) => ["click", "press_enter", "press_key"].includes(h.action) && !h.error)) {
+          status = "stuck"; info = `every given value has been entered, but the goal also asks to send or submit it and nothing was sent; click the send or submit control`;
+          break;
+        }
         const c = await confirm();
         status = c >= 0.65 ? "done" : "likely_done";
         info = `every given value has been entered and Jev wanted to enter values.${act.valueKey} again; the goal may be done, so verify with check or observe`;
@@ -755,7 +775,7 @@ export class Agent {
         if (act.to == null) { status = "ambiguous"; info = "could not pick where to drop"; break; }
       }
       // irreversible gate: the code rule cannot be overridden by Jev; Jev can only add pauses
-      if (GUARDED.has(act.tool) && !allow_irreversible) {
+      if (GUARDED.has(act.tool) && !allow) {
         const el = act.tool === "press_key" && act.target == null ? null : act.el;
         const focused = needsFocused(act.tool, act.target, act.key) ? await tab.J("focused").catch(() => null) : null;
         const rule = gateRule(act.tool, el, page, { key: act.key, focused });
@@ -801,7 +821,7 @@ export class Agent {
         if (note) h.note = note;
         if (op === "type" && act.valueKey) this.typed.set(act.target, act.valueKey);
         await tab.settle({ since });
-        if (!allow_irreversible) await tab.takeHeld();
+        if (!allow) await tab.takeHeld();
       } catch (e) { h.error = e.message.slice(0, 160); }
       const dl = tab.dialogsSince(since);
       if (dl.length) h.dialog = dl.join("; ");
@@ -811,6 +831,7 @@ export class Agent {
       const u = await tab.url();
       if (!domainAllowed(u)) { await tab.exec({ op: "back" }).catch(() => {}); status = "blocked"; info = `navigation to ${u} is outside JEVB_ALLOWED_DOMAINS`; break; }
     }
+    } finally { if (opened) await tab.allowSubmits(false); }
     // stuck, max_actions or ambiguous after acting: the goal may be met anyway (repeat
     // detectors fire on finished toggles and scrolls); ask before handing back as a failure
     if (["stuck", "max_actions", "ambiguous"].includes(status) && history.some((h) => h.action) && page) {
@@ -833,7 +854,7 @@ export class Agent {
       conf = c;
       if (rounds.length) Object.assign(rounds.at(-1), { confirm: c, action_done: ad });
       const why = status === "max_actions" ? "the action budget ran out" : status === "ambiguous" ? "the next target was unclear" : "a repeat or dead end was detected";
-      const at = NAV_ANY.test(goal) && arrivedAt(page, history);
+      const at = NAV_ANY.test(goal) && arrivedAt(page, history, goal);
       if (c >= 0.65) { info = `${why} but the goal looks met`; status = "done"; }
       else if (at && ad >= 0.4) { info = `${why}, but the last click opened the page its link "${String(at).slice(0, 60)}" named`; status = "done"; }
       else if (c >= 0.45) { info = `${why} but the goal may be met; verify with check or observe`; status = "likely_done"; }

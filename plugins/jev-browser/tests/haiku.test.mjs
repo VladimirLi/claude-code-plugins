@@ -93,6 +93,16 @@ test("outerLoop: Haiku never upgrades a status, and a give-up after a met sub-go
   assert.match(r.text, /gave up \(no checkout button\)/);
 });
 
+test("outerLoop: Haiku's done turns a maybe-done repeat stuck into likely_done, nothing else", async () => {
+  let h = harness([], [{ stop: "done", why: "the oldest release is 0.0.1" }]);
+  let r = await outerLoop({ goal: "Open the release history and tell me the oldest release", first: res("stuck", "repeating the same sequence of actions; the goal may already be done, check the page"), ...h, t0: 0 });
+  assert.equal(r.data.status, "likely_done");
+  assert.match(r.text, /^status: likely_done\ninfo: .*Haiku sees it met/);
+  h = harness([], [{ stop: "done", why: "looks fine" }]);
+  r = await outerLoop({ goal: "Type into the disabled input field", first: res("stuck", "repeating the same action on the same page without progress"), ...h, t0: 0 });
+  assert.equal(r.data.status, "stuck");
+});
+
 test("outerLoop: hard budget of sub-goals and wall time, with a next: line", async () => {
   let h = harness([], Array.from({ length: 20 }, (_, k) => ({ next: `step ${k}` })));
   let r = await outerLoop({ goal: "g", first: res("stuck"), ...h, t0: 0, goals: 8 });

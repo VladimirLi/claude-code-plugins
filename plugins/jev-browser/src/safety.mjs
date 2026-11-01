@@ -137,3 +137,14 @@ export function domainAllowed(url) {
   try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) return true; host = u.hostname.toLowerCase(); } catch { return true; }
   return ALLOWED.some((d) => host === d || host.endsWith(`.${d}`));
 }
+
+// QA sites from JEVB_QA_SITES (comma separated hosts; each also covers its subdomains, "*." optional):
+// the person's own test sites, where nothing pauses for confirmation, as if allow_irreversible were
+// set. Checked against the page's URL before each action, so leaving a QA site turns the gate back on.
+const QA = (process.env.JEVB_QA_SITES || "").split(",").map((s) => s.trim().toLowerCase().replace(/^\*\./, "")).filter(Boolean);
+export function qaSite(url, sites = QA) {
+  if (!sites.length) return false;
+  let host;
+  try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) return false; host = u.hostname.toLowerCase(); } catch { return false; }
+  return sites.some((d) => host === d || host.endsWith(`.${d}`));
+}
