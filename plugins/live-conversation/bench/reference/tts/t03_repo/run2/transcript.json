@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "It's a collection of Claude Code plugins. There's a brain dump tool for voice prompts, a status line, a switchboard for turning mods on and off, and a cache timer.",
+      "text_spoken": "It's a collection of Claude Code plugins. There's a brain dump tool for voice prompts, a status line, a switchboard for turning mods on and off, and a cache timer.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

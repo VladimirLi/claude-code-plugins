@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Two hundred and forty tests passed, three failed, all in the auth module. Want me to look at the first one?",
+      "text_spoken": "Two hundred and forty tests passed, three failed, all in the auth module. Want me to look at the first one?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

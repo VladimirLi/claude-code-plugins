@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1300.95, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 948}
+{"t_ms": 3612.33, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4749.93, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 4096}
+{"t_ms": 4750.0, "event": "x_committed", "turn": 1}
+{"t_ms": 4755.94, "event": "x_response_created", "turn": 1}
+{"t_ms": 5394.31, "event": "final_transcript", "turn": 1, "text": "Tell me about the history of the Roman Empire."}
+{"t_ms": 5750.49, "event": "first_reply_text", "turn": 1, "text": "Oh"}
+{"t_ms": 5906.58, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 7620.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 8416.67, "event": "playback_stopped", "turn": 1, "spoken_text": "Oh, the history of the Roman Empire is"}
+{"t_ms": 8416.7, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 7348}
+{"t_ms": 8416.7, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 8476.45, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 10001.12, "event": "user_speech_end", "turn": 2}
+{"t_ms": 11122.44, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 10464}
+{"t_ms": 11122.47, "event": "x_committed", "turn": 2}
+{"t_ms": 11123.81, "event": "x_response_created", "turn": 2}
+{"t_ms": 11710.68, "event": "final_transcript", "turn": 2, "text": "Actually, just give me the short version."}
+{"t_ms": 12291.99, "event": "first_reply_text", "turn": 2, "text": "Sure"}
+{"t_ms": 12462.38, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 40385.79, "event": "reply_audio_end", "turn": 2}

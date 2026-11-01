@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Canberra. Most people guess Sydney, so you're in good company if you did.",
+      "text_spoken": "Canberra. Most people guess Sydney, so you're in good company if you did.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

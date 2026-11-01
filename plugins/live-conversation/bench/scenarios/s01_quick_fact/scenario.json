@@ -1,0 +1,54 @@
+{
+  "id": "s01_quick_fact",
+  "kind": "quick_fact",
+  "description": "Short factual question. Pure latency test: the reply should be one short sentence.",
+  "turns": [
+    {
+      "turn": 1,
+      "text": "What's the capital of Australia?",
+      "segments": [
+        {
+          "text": "What's the capital of Australia?",
+          "speech_start_sample": 4800,
+          "speech_end_sample": 45629,
+          "speech_start_ms": 200.0,
+          "speech_end_ms": 1901.208
+        }
+      ],
+      "pauses": [],
+      "start": {
+        "anchor": "session_start",
+        "offset_ms": 1000
+      },
+      "barge_in": false,
+      "backchannel": false,
+      "voice": "Samantha",
+      "rate_wpm": 180,
+      "audio": {
+        "24k": {
+          "file": "turn_01_24k.wav",
+          "sample_rate": 24000,
+          "num_samples": 53435,
+          "speech_start_sample": 4800,
+          "speech_end_sample": 45629
+        },
+        "16k": {
+          "file": "turn_01_16k.wav",
+          "sample_rate": 16000,
+          "num_samples": 35623,
+          "speech_start_sample": 3200,
+          "speech_end_sample": 30419
+        }
+      },
+      "speech_start_ms": 200.0,
+      "speech_end_ms": 1901.208
+    }
+  ],
+  "generator": {
+    "tool": "macOS say + sox",
+    "noise_floor_dbfs": -65.0,
+    "speech_threshold_dbfs": -48,
+    "lead_in_ms": 200,
+    "tail_ms": 300
+  }
+}

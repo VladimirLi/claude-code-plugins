@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure, running them now. This might take a few seconds.",
+      "text_spoken": "Sure, running them now. This might take a few seconds.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

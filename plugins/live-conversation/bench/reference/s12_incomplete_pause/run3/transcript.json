@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I was wondering if you could check what the readme says about installing.",
+      "asr_text": "I was wondering if... You could check what the README says about installing."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! I can help with that. If you show me the README file or let me know where it\u2019s located, I can check the instructions for installing. Just point me to the file or read me a snippet, and we\u2019ll figure it out together.",
+      "text_spoken": "Sure thing! I can help with that. If you show me the README file or let me know where it\u2019s located, I can check the instructions for installing. Just point me to the file or read me a snippet, and we\u2019ll figure it out together.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

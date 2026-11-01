@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Can you explain how git rebase works?",
+      "asr_text": "Can you explain how Git rebase works?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! Git rebase is a powerful tool that lets you move or integrate a sequence of commits from one branch onto another. Here's how it works: \n\nWhen you run `git rebase`, Git takes the commits from your current branch that aren\u2019t in the target branch and re-applies them one by one on top of it. This creates a clean, linear project history, as if all the changes happened sequentially. \n\nYou can use it to update a feature branch with the latest changes from the main branch without creating extra merge commits. If there are conflicts, you\u2019ll have to resolve them as you go. Once done, the branch looks like it was built on top of the latest commit in the target branch. \n\nIt\u2019s often used in collaborative workflows",
+      "text_spoken": "Sure thing! Git rebase is a powerful tool that lets you move or integrate a sequence of commits from one branch onto another. Here's how",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Wait, wait, how is that different from merge?",
+      "asr_text": "Wait, wait, how is that different from merge?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Great question! Here\u2019s the difference, and I\u2019ll keep it simple and lively. When you do a merge, Git takes the changes from one branch and creates a new \u201cmerge commit\u201d that combines the histories. You get a branching structure, often with multiple lines coming together. It\u2019s kind of like tying two ropes together with a visible knot.\n\nRebase, on the other hand, re-applies your commits on top of the target branch, rewriting history so it looks like everything happened in a straight line, no extra knots. It\u2019s like carefully weaving one rope into another so it\u2019s seamless.\n\nSo, merge keeps the full branching history, while rebase creates a clean, linear history. Both get you to the same end goal\u2014integrating changes\u2014but they do it in very different styles.",
+      "text_spoken": "Great question! Here\u2019s the difference, and I\u2019ll keep it simple and lively. When you do a merge, Git takes the changes from one branch and creates a new \u201cmerge commit\u201d that combines the histories. You get a branching structure, often with multiple lines coming together. It\u2019s kind of like tying two ropes together with a visible knot.\n\nRebase, on the other hand, re-applies your commits on top of the target branch, rewriting history so it looks like everything happened in a straight line, no extra knots. It\u2019s like carefully weaving one rope into another so it\u2019s seamless.\n\nSo, merge keeps the full branching history, while rebase creates a clean, linear history. Both get you to the same end goal\u2014integrating changes\u2014but they do it in very different styles.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

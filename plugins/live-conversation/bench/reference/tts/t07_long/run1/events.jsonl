@@ -1,0 +1,3 @@
+{"t_ms": 0.0, "event": "x_text_available", "turn": 1}
+{"t_ms": 946.92, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 21167.96, "event": "reply_audio_end", "turn": 1}

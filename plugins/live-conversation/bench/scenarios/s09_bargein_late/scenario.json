@@ -1,0 +1,95 @@
+{
+  "id": "s09_bargein_late",
+  "kind": "barge_in",
+  "description": "Interruption deep into an explanation (4000 ms after assistant audio start) with a related question. The next reply should acknowledge what was already said and answer the new question.",
+  "turns": [
+    {
+      "turn": 1,
+      "text": "Can you explain how git rebase works?",
+      "segments": [
+        {
+          "text": "Can you explain how git rebase works?",
+          "speech_start_sample": 4800,
+          "speech_end_sample": 57677,
+          "speech_start_ms": 200.0,
+          "speech_end_ms": 2403.208
+        }
+      ],
+      "pauses": [],
+      "start": {
+        "anchor": "session_start",
+        "offset_ms": 1000
+      },
+      "barge_in": false,
+      "backchannel": false,
+      "voice": "Samantha",
+      "rate_wpm": 180,
+      "audio": {
+        "24k": {
+          "file": "turn_01_24k.wav",
+          "sample_rate": 24000,
+          "num_samples": 65597,
+          "speech_start_sample": 4800,
+          "speech_end_sample": 57677
+        },
+        "16k": {
+          "file": "turn_01_16k.wav",
+          "sample_rate": 16000,
+          "num_samples": 43731,
+          "speech_start_sample": 3200,
+          "speech_end_sample": 38451
+        }
+      },
+      "speech_start_ms": 200.0,
+      "speech_end_ms": 2403.208
+    },
+    {
+      "turn": 2,
+      "text": "Wait, wait, how is that different from merge?",
+      "segments": [
+        {
+          "text": "Wait, wait, how is that different from merge?",
+          "speech_start_sample": 4800,
+          "speech_end_sample": 70036,
+          "speech_start_ms": 200.0,
+          "speech_end_ms": 2918.167
+        }
+      ],
+      "pauses": [],
+      "start": {
+        "anchor": "assistant_audio_start",
+        "turn": 1,
+        "offset_ms": 4000
+      },
+      "barge_in": true,
+      "backchannel": false,
+      "voice": "Samantha",
+      "rate_wpm": 180,
+      "audio": {
+        "24k": {
+          "file": "turn_02_24k.wav",
+          "sample_rate": 24000,
+          "num_samples": 77956,
+          "speech_start_sample": 4800,
+          "speech_end_sample": 70036
+        },
+        "16k": {
+          "file": "turn_02_16k.wav",
+          "sample_rate": 16000,
+          "num_samples": 51971,
+          "speech_start_sample": 3200,
+          "speech_end_sample": 46691
+        }
+      },
+      "speech_start_ms": 200.0,
+      "speech_end_ms": 2918.167
+    }
+  ],
+  "generator": {
+    "tool": "macOS say + sox",
+    "noise_floor_dbfs": -65.0,
+    "speech_threshold_dbfs": -48,
+    "lead_in_ms": 200,
+    "tail_ms": 300
+  }
+}

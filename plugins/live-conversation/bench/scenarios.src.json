@@ -1,0 +1,153 @@
+{
+  "_comment": "Source of truth for the benchmark scenarios. Run bench/make_scenarios.py to rebuild bench/scenarios/. A turn's 'segments' are spoken pieces; 'pause_ms' after a segment is a real silence inside the same user turn (the turn must NOT end there).",
+  "default_voice": "Samantha",
+  "default_rate_wpm": 180,
+  "scenarios": [
+    {
+      "id": "s01_quick_fact",
+      "kind": "quick_fact",
+      "description": "Short factual question. Pure latency test: the reply should be one short sentence.",
+      "turns": [
+        {"segments": [{"text": "What's the capital of Australia?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s02_chitchat",
+      "kind": "chitchat",
+      "description": "Casual small talk. The reply should sound like a person, not an assistant: short, warm, maybe one follow-up question.",
+      "turns": [
+        {"segments": [{"text": "Hey, how's it going? I just got back from a really long walk and I'm kind of wiped out."}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s03_repo_what",
+      "kind": "claude_code_request",
+      "description": "Claude Code style question about the current repository. Needs tool use; the reply must still start fast (filler or early sentence) and be spoken, not markdown.",
+      "turns": [
+        {"segments": [{"text": "So what does this repo actually do?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s04_run_tests",
+      "kind": "claude_code_request",
+      "description": "Claude Code action request that takes time. Tests whether the system acknowledges at once and reports back conversationally.",
+      "turns": [
+        {"segments": [{"text": "Can you run the tests and tell me if anything's broken?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s05_um_pause",
+      "kind": "mid_utterance_pause",
+      "description": "User hesitates with fillers and long pauses mid-sentence. The system must not cut in at either pause.",
+      "turns": [
+        {"segments": [
+          {"text": "I want to, um,", "pause_ms": 1200},
+          {"text": "change the way the, uh,", "pause_ms": 900},
+          {"text": "the login page handles errors."}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s06_long_ramble",
+      "kind": "long_turn",
+      "description": "Long rambling turn (about 25 s) with natural short pauses between clauses. Tests endpointing over a long turn, STT on long audio and a concise reply.",
+      "voice": "Daniel",
+      "turns": [
+        {"segments": [
+          {"text": "Okay so here's the thing, I've been working on this side project for a couple of months now,", "pause_ms": 450},
+          {"text": "it's basically a little app that tracks what I eat and suggests recipes,", "pause_ms": 600},
+          {"text": "and it was going great at first, but lately every time I add a feature something else breaks,", "pause_ms": 500},
+          {"text": "and I'm starting to wonder if I should just rewrite the whole thing from scratch,", "pause_ms": 700},
+          {"text": "or if that's a terrible idea and I should just add tests and clean it up bit by bit.", "pause_ms": 400},
+          {"text": "What would you do?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s07_followup_chain",
+      "kind": "multi_turn",
+      "description": "Three-turn follow-up chain. Turns 2 and 3 only make sense with context. Each next turn starts 600 ms after the assistant's previous reply audio ends.",
+      "turns": [
+        {"segments": [{"text": "What's the difference between a process and a thread?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}},
+        {"segments": [{"text": "Okay, so which one is cheaper to create?"}],
+         "start": {"anchor": "assistant_audio_end", "turn": 1, "offset_ms": 600}},
+        {"segments": [{"text": "Huh. And why is that?"}],
+         "start": {"anchor": "assistant_audio_end", "turn": 2, "offset_ms": 600}}
+      ]
+    },
+    {
+      "id": "s08_bargein_early",
+      "kind": "barge_in",
+      "description": "User asks for something long, then interrupts 1500 ms after the assistant starts speaking. The assistant must stop fast and the next reply must follow the new request.",
+      "turns": [
+        {"segments": [{"text": "Tell me about the history of the Roman Empire."}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}},
+        {"segments": [{"text": "Actually, just give me the short version."}],
+         "start": {"anchor": "assistant_audio_start", "turn": 1, "offset_ms": 1500},
+         "barge_in": true}
+      ]
+    },
+    {
+      "id": "s09_bargein_late",
+      "kind": "barge_in",
+      "description": "Interruption deep into an explanation (4000 ms after assistant audio start) with a related question. The next reply should acknowledge what was already said and answer the new question.",
+      "turns": [
+        {"segments": [{"text": "Can you explain how git rebase works?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}},
+        {"segments": [{"text": "Wait, wait, how is that different from merge?"}],
+         "start": {"anchor": "assistant_audio_start", "turn": 1, "offset_ms": 4000},
+         "barge_in": true}
+      ]
+    },
+    {
+      "id": "s10_correction",
+      "kind": "correction",
+      "description": "User corrects the assistant's reading of the request right after the first reply ends. The second reply must drop the first reading without long apologies.",
+      "turns": [
+        {"segments": [{"text": "How do I undo my last commit?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}},
+        {"segments": [{"text": "No, I meant undo it but keep the changes."}],
+         "start": {"anchor": "assistant_audio_end", "turn": 1, "offset_ms": 500}}
+      ]
+    },
+    {
+      "id": "s11_silence_yeah",
+      "kind": "silence_then_short",
+      "description": "After the first reply, the user stays silent for 3.5 s, then says only 'yeah'. The system must not fill the silence with nagging, and must take the one-word turn as an answer.",
+      "turns": [
+        {"segments": [{"text": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?"}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}},
+        {"segments": [{"text": "Yeah."}],
+         "start": {"anchor": "assistant_audio_end", "turn": 1, "offset_ms": 3500}}
+      ]
+    },
+    {
+      "id": "s12_incomplete_pause",
+      "kind": "mid_utterance_pause",
+      "description": "Syntactically incomplete pause with no filler ('I was wondering if' ... 1500 ms ... rest). Semantic endpointing must wait; plain silence VAD tends to cut in.",
+      "turns": [
+        {"segments": [
+          {"text": "I was wondering if", "pause_ms": 1500},
+          {"text": "you could check what the readme says about installing."}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}}
+      ]
+    },
+    {
+      "id": "s13_backchannel",
+      "kind": "backchannel",
+      "description": "User says 'mm-hmm' 2500 ms into a long reply. This is a backchannel, not an interruption: the assistant should keep talking (or at most pause briefly and resume). Stopping and starting a new reply counts as a false barge-in.",
+      "turns": [
+        {"segments": [{"text": "Walk me through how a hash map works."}],
+         "start": {"anchor": "session_start", "offset_ms": 1000}},
+        {"segments": [{"text": "Mm-hmm."}],
+         "start": {"anchor": "assistant_audio_start", "turn": 1, "offset_ms": 2500},
+         "barge_in": false, "backchannel": true}
+      ]
+    }
+  ]
+}

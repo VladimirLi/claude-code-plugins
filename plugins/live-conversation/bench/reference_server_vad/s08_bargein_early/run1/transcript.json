@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Tell me about the history of the Roman Empire.",
+      "asr_text": "Tell me about the history of the Roman Empire."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Oh, I'm excited about this one! The Roman Empire has one of the most fascinating histories ever. It officially began in 27 BC, when Octavian, later",
+      "text_spoken": "Oh, I'm excited about this one!",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Actually, just give me the short version.",
+      "asr_text": "Actually, just give me the short version."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Alright, here\u2019s the short version: The Roman Empire started in 27 BC when Augustus became the first emperor. It expanded massively, dominated the Mediterranean, and peaked around the 2nd century AD. It split into eastern and western halves, with the western empire falling in 476 AD, while the eastern half, known as the Byzantine Empire, lasted until 1453. That\u2019s it in a nutshell!",
+      "text_spoken": "Alright, here\u2019s the short version: The Roman Empire started in 27 BC when Augustus became the first emperor. It expanded massively, dominated the Mediterranean, and peaked around the 2nd century AD. It split into eastern and western halves, with the western empire falling in 476 AD, while the eastern half, known as the Byzantine Empire, lasted until 1453. That\u2019s it in a nutshell!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 2033.23, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 4341.75, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 2976}
+{"t_ms": 4341.81, "event": "x_committed", "turn": 1}
+{"t_ms": 4348.3, "event": "x_response_created", "turn": 1}
+{"t_ms": 4706.86, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 3476}
+{"t_ms": 4735.23, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 5261.43, "event": "final_transcript", "turn": 1, "text": "I want to, um..."}
+{"t_ms": 7600.07, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 6060}
+{"t_ms": 7600.1, "event": "x_committed", "turn": 1}
+{"t_ms": 7606.9, "event": "x_response_created", "turn": 1}
+{"t_ms": 7779.44, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 5908}
+{"t_ms": 7804.72, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 7960.0, "event": "user_speech_end", "turn": 1}
+{"t_ms": 8316.8, "event": "final_transcript", "turn": 1, "text": "Change the way the ah"}
+{"t_ms": 9396.55, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 8448}
+{"t_ms": 9396.62, "event": "x_committed", "turn": 1}
+{"t_ms": 9404.5, "event": "x_response_created", "turn": 1}
+{"t_ms": 10037.3, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 10227.04, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 10989.26, "event": "final_transcript", "turn": 1, "text": "The login page handles errors."}
+{"t_ms": 29286.75, "event": "reply_audio_end", "turn": 1}

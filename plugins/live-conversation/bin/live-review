@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Review one recorded live session (live/recorder.py): what went wrong, with audio clips.
+
+Usage: live-review [SESSION_DIR]        default: the newest session
+
+Writes <session>/report.md and <session>/clips/*.wav (stereo: left mic, right speaker),
+and prints the report. Run it with the plugin's .venv python (needs numpy).
+
+Checks:
+  barge-ins   each stop of the assistant: the detector's rule, how loud the mic was against
+              the speaker, how much the mic looked like the speaker's own sound (echo), and
+              what the user said after. Nothing said after it, or only a backchannel, means
+              the stop was probably false.
+  turns       per user turn: words heard, filler, wait from the end of speech to the first
+              sound and to the real answer, the reply text.
+  fillers     every filler said, and repeated words across them.
+  feedback    each `/live feedback` note, with the events around it.
+"""
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+import sys
+import wave
+
+import numpy as np
+
+SR = 24000
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+
+def sessions_dir() -> str:
+    return os.environ.get("LIVE_SESSIONS_DIR") or os.path.expanduser("~/.claude/live-conversation/sessions")
+
+
+def lines(path):
+    try:
+        with open(path) as f:
+            for l in f:
+                l = l.strip()
+                if l:
+                    try:
+                        yield json.loads(l)
+                    except ValueError:
+                        pass
+    except FileNotFoundError:
+        return
+
+
+def load_audio(path):
+    try:
+        w = wave.open(path, "rb")
+    except (FileNotFoundError, EOFError, wave.Error):
+        return None
+    n = w.getnframes()
+    data = np.frombuffer(w.readframes(n), dtype="<i2")
+    w.close()
+    if len(data) % 2:
+        data = data[:-1]
+    return data.reshape(-1, 2)
+
+
+def db(x):
+    if len(x) == 0:
+        return -120.0
+    f = x.astype(np.float64) / 32768.0
+    return max(-120.0, float(20 * np.log10(np.sqrt(np.mean(f * f)) + 1e-12)))
+
+
+def echo_corr(mic, ref, max_lag_ms=400):
+    """Best normalized correlation of `mic` with the speaker signal 0..max_lag_ms earlier.
+
+    `ref` is the speaker channel starting max_lag_ms before `mic` starts (same length + that)."""
+    L = int(max_lag_ms * SR / 1000)
+    m = mic.astype(np.float64)
+    m -= m.mean()
+    best, best_lag = 0.0, 0
+    for lag in range(0, L + 1, SR // 1000 * 2):
+        s = ref[L - lag: L - lag + len(m)].astype(np.float64)
+        if len(s) < len(m):
+            continue
+        s = s - s.mean()
+        den = np.sqrt((m * m).sum() * (s * s).sum())
+        if den <= 0:
+            continue
+        c = float((m * s).sum() / den)
+        if c > best:
+            best, best_lag = c, lag
+    return best, best_lag * 1000 / SR
+
+
+def clip(audio, t_ms, out, before_ms=3000, after_ms=2000):
+    a = max(0, int((t_ms - before_ms) * SR / 1000))
+    b = min(len(audio), int((t_ms + after_ms) * SR / 1000))
+    if b <= a:
+        return None
+    w = wave.open(out, "wb")
+    w.setnchannels(2)
+    w.setsampwidth(2)
+    w.setframerate(SR)
+    w.writeframes(audio[a:b].astype("<i2").tobytes())
+    w.close()
+    return out
+
+
+def is_backchannel(text):
+    try:
+        from live.bargein import is_backchannel as f
+        return f(text)
+    except Exception:
+        return bool(re.fullmatch(r"\W*(mm+|hmm+|yeah|yes|ok(ay)?|right|uh-?huh)\W*", text.lower()))
+
+
+def review(d):
+    ev = sorted(lines(os.path.join(d, "events.jsonl")), key=lambda e: e.get("t_ms", 0))
+    fb = list(lines(os.path.join(d, "feedback.jsonl")))
+    try:
+        with open(os.path.join(d, "session.json")) as f:
+            meta = json.load(f)
+    except (FileNotFoundError, ValueError):
+        meta = {}
+    audio = load_audio(os.path.join(d, "audio.wav"))
+    os.makedirs(os.path.join(d, "clips"), exist_ok=True)
+    out = [f"# Live session {os.path.basename(d)}", ""]
+    dur = (len(audio) / SR) if audio is not None else (ev[-1]["t_ms"] / 1000 if ev else 0)
+    out.append(f"Length {dur / 60:.1f} min · plugin {meta.get('plugin_rev', '?')} · folder {meta.get('cwd', '?')}")
+    out.append("")
+
+    def at(name, after, before=None, turn=None):
+        for e in ev:
+            if e["event"] == name and e["t_ms"] >= after and (before is None or e["t_ms"] <= before) \
+                    and (turn is None or e.get("turn") == turn):
+                return e
+        return None
+
+    # -- barge-ins ---------------------------------------------------------------
+    bis = [e for e in ev if e["event"] == "barge_in_detected"]
+    rows, false_n = [], 0
+    for i, b in enumerate(bis):
+        t = b["t_ms"]
+        why = None
+        for e in reversed(ev):
+            if e["event"] == "x_bargein" and e.get("decision") == "barge_in" and abs(e["t_ms"] - t) < 60:
+                why = e
+                break
+        onset = (why or {}).get("onset_ms") or t
+        nxt = at("final_transcript", t, t + 4000)
+        said = (nxt or {}).get("text", "").strip()
+        mic_db = spk_db = corr = lag = None
+        if audio is not None:
+            a = max(int(0.4 * SR), int(onset * SR / 1000))
+            bb = int(max(t, onset + 200) * SR / 1000)
+            seg = audio[a:bb]
+            if len(seg):
+                mic_db, spk_db = db(seg[:, 0]), db(audio[a - int(0.4 * SR):bb, 1])
+                corr, lag = echo_corr(seg[:, 0], audio[a - int(0.4 * SR):bb, 1])
+        verdict = []
+        if not said:
+            verdict.append("nothing said after")
+        elif is_backchannel(said):
+            verdict.append("only a backchannel after")
+        if corr is not None and corr > 0.35:
+            verdict.append(f"mic matches speaker (echo {corr:.2f})")
+        false = bool(verdict) and (not said or is_backchannel(said) or (corr or 0) > 0.5)
+        false_n += false
+        c = clip(audio, t, os.path.join(d, "clips", f"bargein-{i + 1:02d}.wav")) if audio is not None else None
+        rows.append((i + 1, t, (why or {}).get("reason", "?"), mic_db, spk_db, corr, said, verdict, false, c))
+    out.append(f"## Barge-ins: {len(bis)}, probably false: {false_n}")
+    out.append("")
+    if rows:
+        out.append("| # | at | rule | mic dB | speaker dB | echo corr | user said after | verdict | clip |")
+        out.append("|---|---|---|---|---|---|---|---|---|")
+        for n, t, rule, m, s, c, said, verdict, false, cp in rows:
+            f = lambda x: "-" if x is None else f"{x:.0f}" if abs(x) >= 1 else f"{x:.2f}"
+            out.append(f"| {n} | {t / 1000:.1f}s | {rule} | {f(m)} | {f(s)} | {f(c)} | {said[:60] or '—'} | "
+                       f"{'FALSE? ' if false else ''}{'; '.join(verdict) or 'real'} | {os.path.basename(cp) if cp else ''} |")
+        out.append("")
+        out.append("Speaker dB is the speaker level just before the stop. Echo corr near 1 means the mic "
+                   "picked up the speaker (no headphones); near 0 means a different sound.")
+        out.append("")
+
+    # -- turns -------------------------------------------------------------------
+    out.append("## Turns")
+    out.append("")
+    out.append("| turn | at | heard | filler | to first sound | to answer | reply |")
+    out.append("|---|---|---|---|---|---|---|")
+    waits, content_waits = [], []
+    for e in ev:
+        if e["event"] != "turn_end_detected":
+            continue
+        turn, t = e.get("turn"), e["t_ms"]
+        ep = at("x_endpoint", t - 5, t + 50, turn)
+        stop = (ep or {}).get("pause_start_ms") or t
+        heard = (at("final_transcript", t - 2000, t + 4000, turn) or {}).get("text", "")
+        fil = (at("x_filler", t - 50, t + 4000, turn) or {}).get("text", "")
+        first = at("first_reply_audio", t - 50, t + 20000, turn)
+        content = None
+        for x in ev:
+            if x["event"] == "first_reply_audio" and x.get("turn") == turn and x["t_ms"] >= t - 50 \
+                    and not x.get("filler"):
+                content = x
+                break
+        reply = (at("x_reply_text", t, None, turn) or {}).get("text", "")
+        w1 = first["t_ms"] - stop if first else None
+        w2 = content["t_ms"] - stop if content else None
+        if w1 is not None:
+            waits.append(w1)
+        if w2 is not None:
+            content_waits.append(w2)
+        ms = lambda x: "-" if x is None else f"{x:.0f} ms"
+        out.append(f"| {turn} | {t / 1000:.1f}s | {heard[:60]} | {fil} | {ms(w1)} | {ms(w2)} | {reply[:80]} |")
+    out.append("")
+    if waits:
+        out.append(f"Wait to first sound: median {np.median(waits):.0f} ms, p90 {np.percentile(waits, 90):.0f} ms. "
+                   f"To the real answer: median {np.median(content_waits):.0f} ms." if content_waits else "")
+        out.append("")
+
+    # -- fillers -----------------------------------------------------------------
+    fillers = [e.get("text", "") for e in ev if e["event"] in ("x_filler", "x_keepalive")]
+    out.append(f"## Fillers: {len(fillers)} in {sum(1 for e in ev if e['event'] == 'turn_end_detected')} turns")
+    out.append("")
+    if fillers:
+        out.append(", ".join(f'"{f}"' for f in fillers))
+        words = {}
+        for f in fillers:
+            for w in set(re.findall(r"[a-z']+", f.lower())):
+                words[w] = words.get(w, 0) + 1
+        rep = sorted(((n, w) for w, n in words.items() if n >= 3), reverse=True)
+        if rep:
+            out.append("")
+            out.append("Words in 3 or more fillers: " + ", ".join(f"{w} ({n})" for n, w in rep))
+        out.append("")
+
+    # -- feedback ----------------------------------------------------------------
+    out.append(f"## Your feedback notes: {len(fb)}")
+    out.append("")
+    # The note's place on the session clock: the last event written before it, plus the time since.
+    pairs = sorted(((e["t_wall"], e["t_ms"]) for e in ev if "t_wall" in e), key=lambda p: (p[0], p[1]))
+    for i, f in enumerate(fb):
+        tw = f.get("t_wall")
+        t = None
+        before = [p for p in pairs if tw and p[0] <= tw]
+        if before:
+            w, m = max(before, key=lambda p: (p[0], p[1]))
+            t = m + (tw - w) * 1000
+        elif f.get("t_ms_hint") is not None:
+            t = float(f["t_ms_hint"])
+        out.append(f"### {i + 1}. \"{f.get('text', '')}\"" + (f" at {t / 1000:.1f}s" if t is not None else ""))
+        if t is not None:
+            near = [e for e in ev if t - 20000 <= e["t_ms"] <= t + 1000 and not e["event"].startswith("x_bargein")]
+            for e in near[-14:]:
+                txt = e.get("text") or e.get("reason") or e.get("source") or ""
+                out.append(f"- {e['t_ms'] / 1000:.1f}s {e['event']} {str(txt)[:90]}")
+            if audio is not None:
+                c = clip(audio, t, os.path.join(d, "clips", f"feedback-{i + 1:02d}.wav"), before_ms=20000, after_ms=1000)
+                if c:
+                    out.append(f"- clip: clips/{os.path.basename(c)} (20 s before the note)")
+        out.append("")
+
+    errs = [e for e in ev if e["event"] in ("x_warmup_failed", "x_no_reply")]
+    if errs:
+        out.append("## Errors")
+        out.append("")
+        for e in errs:
+            out.append(f"- {e['t_ms'] / 1000:.1f}s {e['event']} {e.get('what', '')} {e.get('error', '')}")
+        out.append("")
+    report = "\n".join(out)
+    with open(os.path.join(d, "report.md"), "w") as f:
+        f.write(report)
+    return report
+
+
+def main():
+    if len(sys.argv) > 1:
+        d = sys.argv[1]
+    else:
+        ds = sorted(glob.glob(os.path.join(sessions_dir(), "*/")))
+        if not ds:
+            sys.exit(f"No recorded sessions in {sessions_dir()}")
+        d = ds[-1]
+    d = d.rstrip("/")
+    print(review(d))
+    print(f"\nReport: {os.path.join(d, 'report.md')}")
+
+
+if __name__ == "__main__":
+    main()

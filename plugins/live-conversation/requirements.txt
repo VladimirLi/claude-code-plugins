@@ -1,0 +1,14 @@
+numpy
+websockets
+# tts (Kokoro-82M, local neural TTS). kokoro/misaki/transformers pin old numpy, so they
+# go in with --no-deps: .venv/bin/pip install --no-deps -r requirements-nodeps.txt
+torch
+scipy
+loguru
+num2words
+regex
+phonemizer
+spacy
+safetensors
+huggingface_hub
+mlx-whisper

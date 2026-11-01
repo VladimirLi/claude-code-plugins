@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Can you explain how git rebase works?",
+      "asr_text": "Can you explain how Git rebase works?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Of course! Git rebase is a super handy tool that lets you move or combine a series of commits onto a new base commit. Imagine you have a feature branch that diverged from the main branch. Over time, the main branch might have new commits, and you want to incorporate those changes into your feature branch. You could merge, but that creates an extra merge commit. Rebase, on the other hand, takes all the commits from your feature branch and reapplies them on top of the latest main branch commit. This creates a clean, linear history.\n\nSo, in essence, Git rebase moves the base of your branch to a new point in the commit history. You can rebase interactively, allowing you to edit, squash, or reorder commits as needed. Just be careful with rebasing public branches, because it rewrites history",
+      "text_spoken": "Of course! Git rebase is a super handy tool that lets you move or combine a series of commits onto a new base commit. Imagine you have a feature branch that diverged from",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Wait, wait, how is that different from merge?",
+      "asr_text": "Wait, wait, how is that different from merge?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Ah, great question! Here\u2019s the key difference: when you do a merge, you take two branches and combine them, creating an extra merge commit that shows the branches coming together. The history remains branched, and you can see the points where the two branches merged.\n\nWith a rebase, on the other hand, you\u2019re taking your commits and replaying them on top of another branch\u2019s latest commit. This creates a straight, linear sequence of commits, as if all your changes were made after the latest changes from the main branch. There\u2019s no extra merge commit, and the history looks cleaner and more linear.\n\nSo, merging preserves the full history of both branches, showing exactly when branches split and came back together. Rebasing keeps a tidier, linear history, making it look like all development happened in one continuous line.",
+      "text_spoken": "Ah, great question! Here\u2019s the key difference: when you do a merge, you take two branches and combine them, creating an extra merge commit that shows the branches coming together. The history remains branched, and you can see the points where the two branches merged.\n\nWith a rebase, on the other hand, you\u2019re taking your commits and replaying them on top of another branch\u2019s latest commit. This creates a straight, linear sequence of commits, as if all your changes were made after the latest changes from the main branch. There\u2019s no extra merge commit, and the history looks cleaner and more linear.\n\nSo, merging preserves the full history of both branches, showing exactly when branches split and came back together. Rebasing keeps a tidier, linear history, making it look like all development happened in one continuous line.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

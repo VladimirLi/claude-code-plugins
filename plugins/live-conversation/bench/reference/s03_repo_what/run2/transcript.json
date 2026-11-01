@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "So what does this repo actually do?",
+      "asr_text": "So what does this repo actually do?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, great question! Let's dive in with some energy. So, a repo\u2014short for repository\u2014basically stores all the code, documentation, and files for a project. Now, what this particular repo does\u2014that depends on the code inside. It might be a web app, a command-line tool, some kind of automation script, maybe even a machine learning model. Usually, you can figure it out by checking the README file. That's like the front door of the repo\u2014it explains what the project is about, how to use it, and what cool problems it solves. So, if you've got the name of the repo or a specific link, we can dig into the details and figure out exactly what it does.",
+      "text_spoken": "Hey, great question! Let's dive in with some energy. So, a repo\u2014short for repository\u2014basically stores all the code, documentation, and files for a project. Now, what this particular repo does\u2014that depends on the code inside. It might be a web app, a command-line tool, some kind of automation script, maybe even a machine learning model. Usually, you can figure it out by checking the README file. That's like the front door of the repo\u2014it explains what the project is about, how to use it, and what cool problems it solves. So, if you've got the name of the repo or a specific link, we can dig into the details and figure out exactly what it does.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

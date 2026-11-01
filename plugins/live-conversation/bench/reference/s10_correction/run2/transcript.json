@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "How do I undo my last commit?",
+      "asr_text": "How do I undo my last commit?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! Sounds like you might be in a tricky spot with your code! Don\u2019t worry though, it\u2019s super easy to undo your last commit. All you need is a simple Git command. Just open up your terminal and type: git reset --soft HEAD~1 if you want to keep your changes in the working directory. That\u2019ll take you back one step, as if that last commit never happened, but keeps all your changes staged and ready for the next commit. If you want to completely discard the changes as well, you can use git reset --hard HEAD~1. Just be careful with that one, because it\u2019ll wipe out any changes in your working directory that weren\u2019t committed. And remember, if you\u2019ve already pushed that commit, you might need to force push after the reset. Good luck!",
+      "text_spoken": "Hey there! Sounds like you might be in a tricky spot with your code! Don\u2019t worry though, it\u2019s super easy to undo your last commit. All you need is a simple Git command. Just open up your terminal and type: git reset --soft HEAD~1 if you want to keep your changes in the working directory. That\u2019ll take you back one step, as if that last commit never happened, but keeps all your changes staged and ready for the next commit. If you want to completely discard the changes as well, you can use git reset --hard HEAD~1. Just be careful with that one, because it\u2019ll wipe out any changes in your working directory that weren\u2019t committed. And remember, if you\u2019ve already pushed that commit, you might need to force push after the reset. Good luck!",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "No, I meant undo it but keep the changes.",
+      "asr_text": "No, I meant undo it but keep the changes."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Got it! If you want to undo the last commit but keep all your changes in your working directory, the perfect command is: git reset --soft HEAD~1. That way, it removes the last commit but leaves your files intact and staged. Then you can make any adjustments you need and recommit.",
+      "text_spoken": "Got it! If you want to undo the last commit but keep all your changes in your working directory, the perfect command is: git reset --soft HEAD~1. That way, it removes the last commit but leaves your files intact and staged. Then you can make any adjustments you need and recommit.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

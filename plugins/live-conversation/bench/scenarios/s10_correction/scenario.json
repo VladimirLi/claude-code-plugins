@@ -1,0 +1,95 @@
+{
+  "id": "s10_correction",
+  "kind": "correction",
+  "description": "User corrects the assistant's reading of the request right after the first reply ends. The second reply must drop the first reading without long apologies.",
+  "turns": [
+    {
+      "turn": 1,
+      "text": "How do I undo my last commit?",
+      "segments": [
+        {
+          "text": "How do I undo my last commit?",
+          "speech_start_sample": 4800,
+          "speech_end_sample": 45891,
+          "speech_start_ms": 200.0,
+          "speech_end_ms": 1912.125
+        }
+      ],
+      "pauses": [],
+      "start": {
+        "anchor": "session_start",
+        "offset_ms": 1000
+      },
+      "barge_in": false,
+      "backchannel": false,
+      "voice": "Samantha",
+      "rate_wpm": 180,
+      "audio": {
+        "24k": {
+          "file": "turn_01_24k.wav",
+          "sample_rate": 24000,
+          "num_samples": 53811,
+          "speech_start_sample": 4800,
+          "speech_end_sample": 45891
+        },
+        "16k": {
+          "file": "turn_01_16k.wav",
+          "sample_rate": 16000,
+          "num_samples": 35874,
+          "speech_start_sample": 3200,
+          "speech_end_sample": 30594
+        }
+      },
+      "speech_start_ms": 200.0,
+      "speech_end_ms": 1912.125
+    },
+    {
+      "turn": 2,
+      "text": "No, I meant undo it but keep the changes.",
+      "segments": [
+        {
+          "text": "No, I meant undo it but keep the changes.",
+          "speech_start_sample": 4800,
+          "speech_end_sample": 66972,
+          "speech_start_ms": 200.0,
+          "speech_end_ms": 2790.5
+        }
+      ],
+      "pauses": [],
+      "start": {
+        "anchor": "assistant_audio_end",
+        "turn": 1,
+        "offset_ms": 500
+      },
+      "barge_in": false,
+      "backchannel": false,
+      "voice": "Samantha",
+      "rate_wpm": 180,
+      "audio": {
+        "24k": {
+          "file": "turn_02_24k.wav",
+          "sample_rate": 24000,
+          "num_samples": 74892,
+          "speech_start_sample": 4800,
+          "speech_end_sample": 66972
+        },
+        "16k": {
+          "file": "turn_02_16k.wav",
+          "sample_rate": 16000,
+          "num_samples": 49928,
+          "speech_start_sample": 3200,
+          "speech_end_sample": 44648
+        }
+      },
+      "speech_start_ms": 200.0,
+      "speech_end_ms": 2790.5
+    }
+  ],
+  "generator": {
+    "tool": "macOS say + sox",
+    "noise_floor_dbfs": -65.0,
+    "speech_threshold_dbfs": -48,
+    "lead_in_ms": 200,
+    "tail_ms": 300
+  }
+}

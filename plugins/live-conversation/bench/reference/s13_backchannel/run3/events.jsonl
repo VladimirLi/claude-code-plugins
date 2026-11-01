@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1278.45, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3176.58, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4295.6, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 3648}
+{"t_ms": 4295.66, "event": "x_committed", "turn": 1}
+{"t_ms": 4295.71, "event": "x_response_created", "turn": 1}
+{"t_ms": 4820.12, "event": "final_transcript", "turn": 1, "text": "Walk me through how a hashmap works."}
+{"t_ms": 5687.8, "event": "first_reply_text", "turn": 1, "text": "Absolutely"}
+{"t_ms": 5847.21, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 8560.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 8715.0, "event": "playback_stopped", "turn": 1, "spoken_text": "Absolutely! Let\u2019s dive into the magic of how a"}
+{"t_ms": 8715.01, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 8340}
+{"t_ms": 8715.01, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 8759.39, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 9028.75, "event": "user_speech_end", "turn": 2}
+{"t_ms": 10160.28, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 9504}
+{"t_ms": 10160.39, "event": "x_committed", "turn": 2}
+{"t_ms": 10160.51, "event": "x_response_created", "turn": 2}
+{"t_ms": 11155.51, "event": "final_transcript", "turn": 2, "text": "Mhm."}
+{"t_ms": 11155.66, "event": "first_reply_text", "turn": 2, "text": "All"}
+{"t_ms": 11155.71, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 69355.71, "event": "reply_audio_end", "turn": 2}

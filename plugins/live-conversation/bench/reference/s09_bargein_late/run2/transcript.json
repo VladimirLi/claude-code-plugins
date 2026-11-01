@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Can you explain how git rebase works?",
+      "asr_text": "Can you explain how git rebase works?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! Let\u2019s break it down in a lively way. \n\nSo, Git rebase is like taking a branch of commits, picking them up, and planting them onto a new base commit. Imagine you\u2019ve got two lines of development: maybe the main branch and your feature branch. If the main branch moved forward with new commits, and you want your feature branch to be on top of those latest changes, you use rebase. \n\nFirst, Git takes all your feature branch",
+      "text_spoken": "Sure thing! Let\u2019s break it down in a lively way. So, Git rebase is like taking",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Wait, wait, how is that different from merge?",
+      "asr_text": "Wait, wait, how is that different from merge?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Great question! Let me break it down. When you use git merge, you're combining two branches by creating a new \"merge commit\" that ties together both histories. It keeps the full branching history intact, so it shows exactly when and where the branches diverged.\n\nOn the other hand, git rebase rewrites the commit history. It takes your branch\u2019s commits and re-applies them, one by one, on top of the target branch. This creates a linear history, as if all the work was done sequentially, making the history cleaner and easier to follow.\n\nSo in short: merge preserves the branching, while rebase creates a streamlined, linear history\u2014but it\u2019s important to be careful with rebase, especially when working with shared branches, because it rewrites history.",
+      "text_spoken": "Great question! Let me break it down. When you use git merge, you're combining two branches by creating a new \"merge commit\" that ties together both histories. It keeps the full branching history intact, so it shows exactly when and where the branches diverged.\n\nOn the other hand, git rebase rewrites the commit history. It takes your branch\u2019s commits and re-applies them, one by one, on top of the target branch. This creates a linear history, as if all the work was done sequentially, making the history cleaner and easier to follow.\n\nSo in short: merge preserves the branching, while rebase creates a streamlined, linear history\u2014but it\u2019s important to be careful with rebase, especially when working with shared branches, because it rewrites history.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Tell me about the history of the Roman Empire.",
+      "asr_text": "Tell me about the history of the Roman Empire."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Oh, the history of the Roman Empire is epic! Let me give you a quick rundown. It all started as a small city-state in the 8th century BCE, traditionally founded in 753 BCE.",
+      "text_spoken": "Oh, the history of the Roman",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Actually, just give me the short version.",
+      "asr_text": "Actually, just give me the short version."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Got it! Short version coming right up. The Roman Empire began around 27 BCE, hit its peak with massive territory across Europe, North Africa, and the Middle East, and eventually split into Eastern and Western halves. The Western half fell in 476 CE, while the Eastern half, known as the Byzantine Empire, lasted until 1453. It left a huge legacy in law, language, engineering, and government.",
+      "text_spoken": "Got it! Short version coming right up. The Roman Empire began around 27 BCE, hit its peak with massive territory across Europe, North Africa, and the Middle East, and eventually split into Eastern and Western halves. The Western half fell in 476 CE, while the Eastern half, known as the Byzantine Empire, lasted until 1453. It left a huge legacy in law, language, engineering, and government.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

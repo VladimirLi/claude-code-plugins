@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1281.34, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3403.21, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4536.81, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 3872}
+{"t_ms": 4536.93, "event": "x_committed", "turn": 1}
+{"t_ms": 4536.99, "event": "x_response_created", "turn": 1}
+{"t_ms": 5144.52, "event": "final_transcript", "turn": 1, "text": "Can you explain how git rebase works?"}
+{"t_ms": 5707.2, "event": "first_reply_text", "turn": 1, "text": "Of"}
+{"t_ms": 5867.67, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 10080.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 10358.33, "event": "playback_stopped", "turn": 1, "spoken_text": "Of course! Git rebase is a powerful tool that helps you clean up your"}
+{"t_ms": 10358.34, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 9780}
+{"t_ms": 10358.34, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 10620.42, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 12798.17, "event": "user_speech_end", "turn": 2}
+{"t_ms": 13929.03, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 13280}
+{"t_ms": 13929.06, "event": "x_committed", "turn": 2}
+{"t_ms": 13929.09, "event": "x_response_created", "turn": 2}
+{"t_ms": 14581.16, "event": "final_transcript", "turn": 2, "text": "Wait, wait, how is that different from merge?"}
+{"t_ms": 14821.44, "event": "first_reply_text", "turn": 2, "text": "Great"}
+{"t_ms": 14975.33, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 60811.83, "event": "reply_audio_end", "turn": 2}

@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?",
+      "asr_text": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, that's an interesting idea! Renaming your main branch to \"trunk\" isn\u2019t necessarily a bad idea at all. In fact, some teams prefer using \"trunk\" because it emphasizes the idea of a central integration point, kind of like the main trunk of a tree where all the branches grow from. It\u2019s a term often used in trunk-based development. The key is just making sure your whole team is on board and that your tools and processes accommodate that change smoothly. If it fits your workflow and makes sense to everyone, it can bring a refreshing clarity to how you think about your codebase.",
+      "text_spoken": "Hey, that's an interesting idea! Renaming your main branch to \"trunk\" isn\u2019t necessarily a bad idea at all. In fact, some teams prefer using \"trunk\" because it emphasizes the idea of a central integration point, kind of like the main trunk of a tree where all the branches grow from. It\u2019s a term often used in trunk-based development. The key is just making sure your whole team is on board and that your tools and processes accommodate that change smoothly. If it fits your workflow and makes sense to everyone, it can bring a refreshing clarity to how you think about your codebase.",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Yeah.",
+      "asr_text": "Yeah."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Exactly! And you know, renaming to something like \"trunk\" can also help shift the mindset from the old \"master\" or even \"main\" terminology toward a more continuous integration approach. It can promote frequent merges and a healthier development flow. Just make sure to update your CI/CD pipelines, documentation, and any scripts that refer to the branch name. Once everything\u2019s lined up, you\u2019ll have a solid, well-rooted foundation\u2014pun intended!",
+      "text_spoken": "Exactly! And you know, renaming to something like \"trunk\" can also help shift the mindset from the old \"master\" or even \"main\" terminology toward a more continuous integration approach. It can promote frequent merges and a healthier development flow. Just make sure to update your CI/CD pipelines, documentation, and any scripts that refer to the branch name. Once everything\u2019s lined up, you\u2019ll have a solid, well-rooted foundation\u2014pun intended!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

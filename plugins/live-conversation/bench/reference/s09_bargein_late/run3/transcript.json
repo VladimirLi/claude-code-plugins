@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Can you explain how git rebase works?",
+      "asr_text": "Can you explain how git rebase works?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Of course! Git rebase is a powerful tool that helps you clean up your commit history by moving or combining commits from one branch onto another. Think of it like taking the changes you've made on a feature branch and replaying them on top of the latest version of your main branch.\n\nHere\u2019s how it works in a nutshell:\n\nFirst, you choose the branch you want to rebase. Then Git internally takes",
+      "text_spoken": "Of course! Git rebase is a powerful tool that helps you clean up your",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Wait, wait, how is that different from merge?",
+      "asr_text": "Wait, wait, how is that different from merge?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Great question! Let\u2019s break it down. \n\nWhen you do a merge, you're creating a new commit that combines the history of both branches. So it leaves a \"merge commit\" in your history, showing where the two branches were joined. \n\nBut with rebase, there\u2019s no extra merge commit. It moves your entire branch, replaying each commit from your feature branch onto the tip of the target branch, like main or develop. This keeps your history linear and clean, as if all your work had been done sequentially after the latest changes in the main branch. \n\nSo the big difference is: merge keeps all the history, including the branch points, while rebase gives you a streamlined, linear history. That\u2019s why rebase is often used when you want a neat, easy-to-follow commit history.",
+      "text_spoken": "Great question! Let\u2019s break it down. \n\nWhen you do a merge, you're creating a new commit that combines the history of both branches. So it leaves a \"merge commit\" in your history, showing where the two branches were joined. \n\nBut with rebase, there\u2019s no extra merge commit. It moves your entire branch, replaying each commit from your feature branch onto the tip of the target branch, like main or develop. This keeps your history linear and clean, as if all your work had been done sequentially after the latest changes in the main branch. \n\nSo the big difference is: merge keeps all the history, including the branch points, while rebase gives you a streamlined, linear history. That\u2019s why rebase is often used when you want a neat, easy-to-follow commit history.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

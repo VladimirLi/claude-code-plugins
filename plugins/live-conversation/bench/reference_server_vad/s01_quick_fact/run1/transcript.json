@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "What's the capital of Australia?",
+      "asr_text": "What's the capital of Australia?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "The capital of Australia is Canberra! It's not as big or famous as Sydney or Melbourne, but it's the political heart of the country, packed with government buildings, museums, and a whole lot of history.",
+      "text_spoken": "The capital of Australia is Canberra! It's not as big or famous as Sydney or Melbourne, but it's the political heart of the country, packed with government buildings, museums, and a whole lot of history.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

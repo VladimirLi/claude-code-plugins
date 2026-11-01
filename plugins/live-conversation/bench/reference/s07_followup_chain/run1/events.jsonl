@@ -1,0 +1,31 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1278.47, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3675.12, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4800.44, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 4160}
+{"t_ms": 4800.84, "event": "x_committed", "turn": 1}
+{"t_ms": 4800.93, "event": "x_response_created", "turn": 1}
+{"t_ms": 5602.94, "event": "final_transcript", "turn": 1, "text": "What's the difference between a process and a thread?"}
+{"t_ms": 5921.34, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 6090.96, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 49790.96, "event": "reply_audio_end", "turn": 1}
+{"t_ms": 50460.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 50517.49, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 50164}
+{"t_ms": 53042.83, "event": "user_speech_end", "turn": 2}
+{"t_ms": 54166.33, "event": "turn_end_detected", "turn": 2, "source": "semantic_vad", "audio_end_ms": 53504}
+{"t_ms": 54166.43, "event": "x_committed", "turn": 2}
+{"t_ms": 54166.71, "event": "x_response_created", "turn": 2}
+{"t_ms": 54595.63, "event": "first_reply_text", "turn": 2, "text": "Ah"}
+{"t_ms": 54772.81, "event": "final_transcript", "turn": 2, "text": "Okay, so which one is cheaper to create?"}
+{"t_ms": 54772.83, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 77423.0, "event": "reply_audio_end", "turn": 2}
+{"t_ms": 78040.0, "event": "user_speech_start", "turn": 3}
+{"t_ms": 79246.09, "event": "x_vad_speech_started", "turn": 3, "audio_start_ms": 77780}
+{"t_ms": 79523.83, "event": "user_speech_end", "turn": 3}
+{"t_ms": 80621.41, "event": "turn_end_detected", "turn": 3, "source": "semantic_vad", "audio_end_ms": 79968}
+{"t_ms": 80621.48, "event": "x_committed", "turn": 3}
+{"t_ms": 80623.54, "event": "x_response_created", "turn": 3}
+{"t_ms": 81167.45, "event": "final_transcript", "turn": 3, "text": "Huh, and why is that?"}
+{"t_ms": 81219.29, "event": "first_reply_text", "turn": 3, "text": "Alright"}
+{"t_ms": 81365.5, "event": "first_reply_audio", "turn": 3, "filler": false}
+{"t_ms": 119982.21, "event": "reply_audio_end", "turn": 3}

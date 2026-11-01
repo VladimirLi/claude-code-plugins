@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?",
+      "asr_text": "I'm thinking about renaming the main branch to trunk. Is that a bad idea?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! Renaming the main branch to \"trunk\" isn't necessarily a bad idea\u2014it's all about your team's conventions and what makes sense for your workflow. Some teams go with \"main,\" others prefer \"trunk,\" especially if they follow a trunk-based development model. Just be sure to communicate the change clearly to the team, update any documentation, and adjust automation or pipelines accordingly. If everyone's on board and it fits your approach, it can be a pretty cool and meaningful shift.",
+      "text_spoken": "Hey there! Renaming the main branch to \"trunk\" isn't necessarily a bad idea\u2014it's all about your team's conventions and what makes sense for your workflow. Some teams go with \"main,\" others prefer \"trunk,\" especially if they follow a trunk-based development model. Just be sure to communicate the change clearly to the team, update any documentation, and adjust automation or pipelines accordingly. If everyone's on board and it fits your approach, it can be a pretty cool and meaningful shift.",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Yeah.",
+      "asr_text": "Yeah."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Totally! And you know, it might even add some personality to your workflow. \"Trunk\" can give that solid, central vibe, like the main trunk of a tree that branches grow from. If it helps everyone align on the core development flow, go for it! Just remember to give your team a heads-up, maybe a quick walkthrough of the reasoning, and you\u2019re all set.",
+      "text_spoken": "Totally! And you know, it might even add some personality to your workflow. \"Trunk\" can give that solid, central vibe, like the main trunk of a tree that branches grow from. If it helps everyone align on the core development flow, go for it! Just remember to give your team a heads-up, maybe a quick walkthrough of the reasoning, and you\u2019re all set.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

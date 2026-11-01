@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "How do I undo my last commit?",
+      "asr_text": "How do I undo my last commit?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there! So you want to undo your last commit? No worries, it\u2019s pretty straightforward. If you haven\u2019t pushed the commit yet, you can use the command:\n\ngit reset --soft HEAD~1\n\nThat will undo the last commit but keep your changes in the working directory, so you can tweak them or recommit.\n\nIf you want to completely remove the changes as well, you can do:\n\ngit reset --hard HEAD~1\n\nBut be careful with that one, because it\u2019ll erase the changes entirely.\n\nAnd if you\u2019ve already pushed the commit and want to undo it publicly, you might want to look into doing a git revert. That creates a new commit that undoes the previous one, which can keep your history clean, especially when working with others.\n\nNeed more details on any of those steps?",
+      "text_spoken": "Hey there! So you want to undo your last commit? No worries, it\u2019s pretty straightforward. If you haven\u2019t pushed the commit yet, you can use the command:\n\ngit reset --soft HEAD~1\n\nThat will undo the last commit but keep your changes in the working directory, so you can tweak them or recommit.\n\nIf you want to completely remove the changes as well, you can do:\n\ngit reset --hard HEAD~1\n\nBut be careful with that one, because it\u2019ll erase the changes entirely.\n\nAnd if you\u2019ve already pushed the commit and want to undo it publicly, you might want to look into doing a git revert. That creates a new commit that undoes the previous one, which can keep your history clean, especially when working with others.\n\nNeed more details on any of those steps?",
+      "interrupted": false,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "No, I meant undo it but keep the changes.",
+      "asr_text": "No, I meant undo it but keep the changes."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Got it! You want to undo the commit but keep all the changes in your working directory so you can adjust or recommit as needed. The perfect command for that is:\n\ngit reset --soft HEAD~1\n\nThis will leave all your changes staged, exactly as they were before that last commit. From there, you can make edits or just recommit with a new message. Super handy, right?",
+      "text_spoken": "Got it! You want to undo the commit but keep all the changes in your working directory so you can adjust or recommit as needed. The perfect command for that is:\n\ngit reset --soft HEAD~1\n\nThis will leave all your changes staged, exactly as they were before that last commit. From there, you can make edits or just recommit with a new message. Super handy, right?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1287.73, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 2847.74, "event": "turn_end_detected", "turn": 1, "source": "server_vad", "audio_end_ms": 2784}
+{"t_ms": 2847.77, "event": "x_committed", "turn": 1}
+{"t_ms": 2847.78, "event": "x_response_created", "turn": 1}
+{"t_ms": 3301.24, "event": "final_transcript", "turn": 1, "text": "I was wondering if..."}
+{"t_ms": 3870.36, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 3508}
+{"t_ms": 3878.59, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 6320.42, "event": "user_speech_end", "turn": 1}
+{"t_ms": 6925.98, "event": "turn_end_detected", "turn": 1, "source": "server_vad", "audio_end_ms": 6880}
+{"t_ms": 6926.02, "event": "x_committed", "turn": 1}
+{"t_ms": 6928.93, "event": "x_response_created", "turn": 1}
+{"t_ms": 7457.18, "event": "final_transcript", "turn": 1, "text": "You could check what the README says about installing."}
+{"t_ms": 7819.8, "event": "first_reply_text", "turn": 1, "text": "Sure"}
+{"t_ms": 7944.83, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 21582.33, "event": "reply_audio_end", "turn": 1}

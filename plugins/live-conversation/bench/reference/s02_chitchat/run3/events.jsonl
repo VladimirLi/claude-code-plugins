@@ -1,0 +1,11 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1278.52, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 6214.29, "event": "user_speech_end", "turn": 1}
+{"t_ms": 7362.85, "event": "turn_end_detected", "turn": 1, "source": "semantic_vad", "audio_end_ms": 6688}
+{"t_ms": 7362.9, "event": "x_committed", "turn": 1}
+{"t_ms": 7362.95, "event": "x_response_created", "turn": 1}
+{"t_ms": 7940.09, "event": "final_transcript", "turn": 1, "text": "Hey, how's it going? I just got back from a really long walk and I'm kind of wiped out."}
+{"t_ms": 8007.69, "event": "first_reply_text", "turn": 1, "text": "Hey"}
+{"t_ms": 8165.62, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 21811.12, "event": "reply_audio_end", "turn": 1}

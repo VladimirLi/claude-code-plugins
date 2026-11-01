@@ -1,0 +1,23 @@
+{"t_ms": 0.0, "event": "session_start", "turn": 1}
+{"t_ms": 1200.0, "event": "user_speech_start", "turn": 1}
+{"t_ms": 1284.89, "event": "x_vad_speech_started", "turn": 1, "audio_start_ms": 916}
+{"t_ms": 3403.21, "event": "user_speech_end", "turn": 1}
+{"t_ms": 4040.42, "event": "turn_end_detected", "turn": 1, "source": "server_vad", "audio_end_ms": 3968}
+{"t_ms": 4040.45, "event": "x_committed", "turn": 1}
+{"t_ms": 4044.81, "event": "x_response_created", "turn": 1}
+{"t_ms": 4744.25, "event": "final_transcript", "turn": 1, "text": "Can you explain how Git rebase works?"}
+{"t_ms": 5177.46, "event": "first_reply_text", "turn": 1, "text": "Sure"}
+{"t_ms": 5331.79, "event": "first_reply_audio", "turn": 1, "filler": false}
+{"t_ms": 9590.0, "event": "user_speech_start", "turn": 2}
+{"t_ms": 12308.17, "event": "user_speech_end", "turn": 2}
+{"t_ms": 13371.25, "event": "playback_stopped", "turn": 1, "spoken_text": "Sure thing! Git rebase is a powerful tool that lets you move or integrate a sequence of commits from one branch onto another. Here's how it"}
+{"t_ms": 13371.26, "event": "x_vad_speech_started", "turn": 2, "audio_start_ms": 9332}
+{"t_ms": 13371.26, "event": "barge_in_detected", "turn": 2}
+{"t_ms": 13594.63, "event": "x_response_cancelled", "turn": 1}
+{"t_ms": 14060.87, "event": "turn_end_detected", "turn": 2, "source": "server_vad", "audio_end_ms": 12896}
+{"t_ms": 14060.92, "event": "x_committed", "turn": 2}
+{"t_ms": 14060.96, "event": "x_response_created", "turn": 2}
+{"t_ms": 14734.8, "event": "final_transcript", "turn": 2, "text": "Wait, wait, how is that different from merge?"}
+{"t_ms": 14926.37, "event": "first_reply_text", "turn": 2, "text": "Great"}
+{"t_ms": 15010.75, "event": "first_reply_audio", "turn": 2, "filler": false}
+{"t_ms": 57642.71, "event": "reply_audio_end", "turn": 2}

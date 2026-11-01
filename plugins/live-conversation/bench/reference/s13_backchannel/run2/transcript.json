@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Walk me through how a hash map works.",
+      "asr_text": "Walk me through how a hash map works."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! Let me break it down for you in a fun way. Imagine a big library with lots of lockers. Each locker has a unique number. Now, when you want to store a book, you don\u2019t put it just anywhere. You use a magic formula\u2014called a hash function\u2014that takes the book\u2019s title",
+      "text_spoken": "Sure thing! Let me break it down for you in",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "user",
+      "turn": 2,
+      "script": "Mm-hmm.",
+      "asr_text": "Mhm."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 2,
+      "text_generated": "Alright, let's dive in! A hash map is a super cool data structure that stores key-value pairs. Here's how it works step-by-step.\n\nFirst, you have a key, which is like a unique identifier, and a value, which is the data associated with that key. \n\nSecond, the hash map uses a hash function. This function takes your key and turns it into an index, basically a number, that tells you where to store the value inside an array.\n\nThird, the hash map uses an array under the hood. Each slot in that array is called a bucket. The hash function makes sure the key gets assigned to a bucket.\n\nFourth, sometimes different keys can end up in the same bucket. That\u2019s called a collision. Hash maps handle collisions in a few ways, like chaining, where you store multiple key-value pairs in a linked list or another structure at that bucket.\n\nFifth, when you want to find a value, the hash map uses the same hash function on the key, finds the right bucket, and then retrieves the value quickly.\n\nHash maps are super fast for lookups, inserts, and deletes\u2014on average, they\u2019re O(1) time complexity. That\u2019s the magic of a hash map!",
+      "text_spoken": "Alright, let's dive in! A hash map is a super cool data structure that stores key-value pairs. Here's how it works step-by-step.\n\nFirst, you have a key, which is like a unique identifier, and a value, which is the data associated with that key. \n\nSecond, the hash map uses a hash function. This function takes your key and turns it into an index, basically a number, that tells you where to store the value inside an array.\n\nThird, the hash map uses an array under the hood. Each slot in that array is called a bucket. The hash function makes sure the key gets assigned to a bucket.\n\nFourth, sometimes different keys can end up in the same bucket. That\u2019s called a collision. Hash maps handle collisions in a few ways, like chaining, where you store multiple key-value pairs in a linked list or another structure at that bucket.\n\nFifth, when you want to find a value, the hash map uses the same hash function on the key, finds the right bucket, and then retrieves the value quickly.\n\nHash maps are super fast for lookups, inserts, and deletes\u2014on average, they\u2019re O(1) time complexity. That\u2019s the magic of a hash map!",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

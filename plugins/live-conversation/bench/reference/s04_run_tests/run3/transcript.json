@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "Can you run the tests and tell me if anything's broken?",
+      "asr_text": "Can you run the tests and tell me if anything's broken?"
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Absolutely! I can run the tests for you. Let me take a look at everything and see if there's anything broken or any errors popping up. I'll run a full check and let you know the results. Give me just a moment.",
+      "text_spoken": "Absolutely! I can run the tests for you. Let me take a look at everything and see if there's anything broken or any errors popping up. I'll run a full check and let you know the results. Give me just a moment.",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

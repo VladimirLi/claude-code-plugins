@@ -1,0 +1,18 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I was wondering if you could check what the readme says about installing.",
+      "asr_text": "I was wondering if... You could check what the README says about installing."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Sure thing! Let's take a look at what the README says about installing. Usually, README files have step-by-step instructions for installation. Could you let me know where the README file is located, or which project or software we're talking about?",
+      "text_spoken": "Sure thing! Let's take a look at what the README says about installing. Usually, README files have step-by-step instructions for installation. Could you let me know where the README file is located, or which project or software we're talking about?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

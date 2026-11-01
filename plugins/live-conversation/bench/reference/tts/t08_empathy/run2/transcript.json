@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Ugh, that's frustrating. Okay, let's figure it out together. What did you change right before it broke?",
+      "text_spoken": "Ugh, that's frustrating. Okay, let's figure it out together. What did you change right before it broke?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "turns": [
+    {
+      "role": "user",
+      "turn": 1,
+      "script": "I was wondering if you could check what the readme says about installing.",
+      "asr_text": "I was wondering if... You could check what the README says about installing."
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey there!",
+      "text_spoken": "Hey",
+      "interrupted": true,
+      "fillers": []
+    },
+    {
+      "role": "assistant",
+      "reply_to": 1,
+      "text_generated": "Hey, that\u2019s a great idea! The README file usually has the clearest instructions for installation. Do you want me to help walk you through what the README says, or are you looking for a particular part, like dependencies or configuration steps?",
+      "text_spoken": "Hey, that\u2019s a great idea! The README file usually has the clearest instructions for installation. Do you want me to help walk you through what the README says, or are you looking for a particular part, like dependencies or configuration steps?",
+      "interrupted": false,
+      "fillers": []
+    }
+  ]
+}
