@@ -4,6 +4,7 @@
 Usage (from the plugin folder, with the plugin venv):
   .venv/bin/python bench/run_ours.py [--mode e2e|brain|tts] [--scenarios s01_quick_fact,s07_followup_chain]
                                      [--run-id ID] [--runs-dir bench/runs] [--config cfg.json] [--fast]
+                                     [--echo-db -38 [--echo-delay-ms 30]]
 
 Modes:
   e2e    scenario WAVs streamed as the mic in real time through the whole pipeline
@@ -161,12 +162,15 @@ async def _watch_tail(audio, prestart: BrainPrestart) -> None:
 
 
 async def run_e2e(sid: str, out: str, cfg: dict, realtime: bool = True, tts: SharedTTS | None = None,
-                  brain: Brain | None = None, prestart_next: BrainPrestart | None = None) -> dict:
+                  brain: Brain | None = None, prestart_next: BrainPrestart | None = None,
+                  echo_db: float | None = None, echo_delay_ms: float = 30.0) -> dict:
     """One scenario. `tts`: shared across scenarios (else a fresh one). `brain`: already started
-    by a BrainPrestart (else a fresh one). `prestart_next`: fired once only the tail is left."""
+    by a BrainPrestart (else a fresh one). `prestart_next`: fired once only the tail is left.
+    `echo_db`: mix the reply audio back into the mic this far below it (synthetic speaker echo)."""
     os.makedirs(out, exist_ok=True)
     log = EventLog(Clock())
-    audio = FileAudio(os.path.join(SCEN, sid), log, realtime=realtime)
+    audio = FileAudio(os.path.join(SCEN, sid), log, realtime=realtime, echo_gain_db=echo_db,
+                      echo_delay_ms=echo_delay_ms)
     cfg = _scenario_cfg(cfg)
     comps = build(cfg)
     if tts is not None:
@@ -344,13 +348,16 @@ async def amain() -> str:
     ap.add_argument("--runs-dir", default=os.path.join(BENCH, "runs"))
     ap.add_argument("--config", help="JSON file with per-module config sections")
     ap.add_argument("--fast", action="store_true", help="feed audio faster than real time (debug only; invalid for latency)")
+    ap.add_argument("--echo-db", type=float, help="e2e: mix the reply audio into the mic this many dB below it")
+    ap.add_argument("--echo-delay-ms", type=float, default=30.0, help="e2e: delay of that echo")
     a = ap.parse_args()
     cfg = json.load(open(a.config)) if a.config else {}
     run_id = a.run_id or f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-ours-{a.mode}"
     run = os.path.join(a.runs_dir, run_id)
     os.makedirs(run, exist_ok=True)
     json.dump({"system": "ours", "created": dt.datetime.now(dt.timezone.utc).isoformat(), "git_commit": git_commit(),
-               "config": {"mode": a.mode, **cfg}}, open(os.path.join(run, "run.json"), "w"), indent=2)
+               "config": {"mode": a.mode, **cfg},
+               **({"echo": {"gain_db": a.echo_db, "delay_ms": a.echo_delay_ms}} if a.echo_db is not None else {})}, open(os.path.join(run, "run.json"), "w"), indent=2)
     ids = a.scenarios.split(",") if a.scenarios else None
     if a.mode == "tts":
         await run_tts(run, cfg, ids)
@@ -366,7 +373,8 @@ async def amain() -> str:
                 if a.mode == "e2e":
                     info = await run_e2e(sid, os.path.join(run, sid), cfg, realtime=not a.fast, tts=tts,
                                          brain=prestart.take(),
-                                         prestart_next=prestart if i + 1 < len(sids) else None)
+                                         prestart_next=prestart if i + 1 < len(sids) else None,
+                                         echo_db=a.echo_db, echo_delay_ms=a.echo_delay_ms)
                 else:
                     await run_brain(sid, os.path.join(run, sid), cfg)
                 extra = "".join(f" {k}={info[k]}" for k in ("start_s", "session_s") if k in info)

@@ -9,8 +9,9 @@ Interface:
                     now, the decision follows ("barge_in" or "resume")
         "resume"    the sound was a backchannel ("mm-hmm") or noise: carry on
         None        nothing to do
-    bi.on_transcript(text)   final STT text: settles an open episode (backchannel words
-                             resume, anything else barges in) on the next feed()
+    bi.on_transcript(text, end_ms=None)   final STT text: settles an open episode (backchannel
+                             words resume, anything else barges in) on the next feed(); not
+                             an episode that opened after end_ms (the text's speech had ended)
     bi.reset()
     bi.last                  info on the last decision: kind, reason, onset_ms, t_ms
 
@@ -55,6 +56,7 @@ from collections import deque
 from typing import Optional
 
 import numpy as np
+from scipy.signal import butter, sosfilt, sosfilt_zi
 
 from .events import FRAME, FRAME_MS, SR
 
@@ -73,6 +75,7 @@ DEFAULTS = {
     "burst_gap_ms": 140.0,     # a gap this long splits bursts
     "first_burst_min_ms": 100.0,  # the first burst must be this long for the burst rule
     "burst_min_ms": 40.0,      # the second burst must be this long
+    "rejoin_burst_min_ms": 150.0,  # same, after a "resume" (40 ms of echo there stopped a reply live)
     "end_ms": 350.0,           # silence that closes an episode -> "resume"
     "carry_gap_ms": 60.0,      # user speech ongoing (gap <= this) when a reply starts -> judge it at once
     "rejoin_ms": 800.0,        # speech this soon after a "resume" continues the same turn (burst rule)
@@ -80,11 +83,8 @@ DEFAULTS = {
     "floor_window_ms": 1500.0,  # noise floor = quietest frame in this window (+ floor_offset_db)
     "floor_offset_db": 3.0,
     "initial_floor_db": -70.0,  # floor assumed before the mic has been heard for floor_window_ms
+    "highpass_hz": 80.0,       # mic high-pass before all features (0 = off): below any voice's pitch
 }
-
-BACKCHANNEL_RE = re.compile(
-    r"^(?:(?:mm+|m+|hmm+|hm+|mhm+|mm-?hm+|uh-?huh|uh+-?hu+h|yeah|yep|yup|yes|ok(?:ay)?|right|sure|"
-    r"i see|got it|cool|nice|wow|oh|ah|aha|uh|um)[\s,.!?-]*)+$")
 
 _NFFT = 1024
 _FREQS = np.fft.rfftfreq(_NFFT, 1.0 / SR)
@@ -95,9 +95,10 @@ _LAG_LO, _LAG_HI = int(SR / 400), int(SR / 70)
 
 
 def is_backchannel(text: str) -> bool:
-    """True if a transcript is only a backchannel ("Mm-hmm.", "yeah", "okay, right")."""
-    t = text.strip().lower()
-    return bool(t) and bool(BACKCHANNEL_RE.match(t))
+    """True if a transcript is only a backchannel ("Mm-hmm.", "yeah", "okay, right"). One list for
+    every caller: turntaking's (FLOOR-SPEC.md, "one backchannel test")."""
+    from .turntaking import is_backchannel as tt_is_backchannel, normalize
+    return tt_is_backchannel(normalize(text or ""))
 
 
 def frame_features(frame: np.ndarray, prev: Optional[np.ndarray] = None) -> dict:
@@ -134,6 +135,10 @@ class BargeIn:
         self._levels: deque = deque([self.cfg["initial_floor_db"] - self.cfg["floor_offset_db"]] * n, maxlen=n)
         self.floor_db = self.cfg["initial_floor_db"]   # noise floor estimate, survives reset()
         self._prev: Optional[np.ndarray] = None
+        self._hp = None
+        if self.cfg["highpass_hz"] > 0:
+            self._hp_sos = butter(4, self.cfg["highpass_hz"], "highpass", fs=SR, output="sos")
+            self._hp = sosfilt_zi(self._hp_sos) * 0.0
         self.last: dict = {}
         self._resumed: Optional[tuple] = None   # (t_ms, speech_ms) of the last "resume"
         self._was_speaking = False
@@ -149,16 +154,23 @@ class BargeIn:
         self.bursts = 0
         self.burst_ms = 0.0            # length of the current burst
         self.first_burst_ms = 0.0
+        self.rejoined = False          # this episode continues one that resumed
         self.open_n = 0
         self.fric_n = 0
         self.ducked = False
         self.fired = False
         self._pending: Optional[str] = None
 
-    def on_transcript(self, text: str) -> None:
+    def on_transcript(self, text: str, end_ms: Optional[float] = None) -> None:
+        """`end_ms`: when the transcribed speech had ended. An episode that opened after that is
+        other sound (a click while the reply's filler plays), not the speech of this text."""
         if not self.active or self.fired:
             return
-        self._pending = "resume" if is_backchannel(text) else "barge_in"
+        if end_ms is not None and self.onset_ms is not None and self.onset_ms > end_ms:
+            return
+        # no words: noise or echo the STT heard nothing in (live session: 1 of 2 false barge-ins)
+        words = re.search(r"\w", text or "")
+        self._pending = "resume" if not words or is_backchannel(text) else "barge_in"
 
     # -- per frame ---------------------------------------------------------
     def _is_speech(self, f: dict) -> tuple[bool, bool, bool]:
@@ -189,7 +201,7 @@ class BargeIn:
             self.bursts = 1
             if self._resumed and t_ms - self._resumed[0] <= c["rejoin_ms"]:
                 # more speech right after a short sound: the user is still going ("no, ... I meant")
-                self.bursts, self.first_burst_ms = 2, self._resumed[1]
+                self.bursts, self.first_burst_ms, self.rejoined = 2, self._resumed[1], True
             self._resumed = None
         if speech:
             if self.gap_ms >= c["burst_gap_ms"]:
@@ -219,14 +231,25 @@ class BargeIn:
             return "open"
         if self.fric_n >= c["fric_frames"] and has_voice:
             return "fric"
+        burst_min = c["rejoin_burst_min_ms"] if self.rejoined else c["burst_min_ms"]
         if (self.bursts >= 2 and self.first_burst_ms >= c["first_burst_min_ms"]
-                and self.burst_ms >= c["burst_min_ms"] and has_voice):
+                and self.burst_ms >= burst_min and has_voice):
             return "burst"
         if self.voiced_ms >= c["long_ms"]:
             return "long"
         return None
 
+    def _highpass(self, frame: np.ndarray) -> np.ndarray:
+        # A 30-40 Hz rumble (breath on the mic, a bump) is loud and periodic, so unfiltered it
+        # passed as long voiced speech: live session 20261030-110521 had three false barge-ins
+        # on it at -30..-45 dBFS with nothing said. Voices have no energy that low.
+        if self._hp is None:
+            return frame
+        y, self._hp = sosfilt(self._hp_sos, frame.astype(np.float64), zi=self._hp)
+        return y
+
     def feed(self, frame: np.ndarray, t_ms: float, assistant_speaking: bool) -> Optional[str]:
+        frame = self._highpass(frame)
         f = frame_features(frame, self._prev)
         self._prev = frame
         self._track_floor(f["db"])

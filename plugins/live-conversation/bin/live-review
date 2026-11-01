@@ -143,11 +143,16 @@ def review(d):
         t = b["t_ms"]
         why = None
         for e in reversed(ev):
-            if e["event"] == "x_bargein" and e.get("decision") == "barge_in" and abs(e["t_ms"] - t) < 60:
+            # a detector barge-in, or the floor controller's pause on interim words (reason "interim")
+            if e["event"] == "x_bargein" and (e.get("decision") == "barge_in" or e.get("reason") == "interim") \
+                    and abs(e["t_ms"] - t) < 60:
                 why = e
                 break
         onset = (why or {}).get("onset_ms") or t
-        nxt = at("final_transcript", t, t + 4000)
+        # what the user said: the first final after the stop, up to the next barge-in (a long turn's
+        # final comes when it ends, 40 s later in session 20261030-110521, not within 4 s)
+        later = [x["t_ms"] for x in bis[i + 1:]]
+        nxt = at("final_transcript", t, min([t + 60000] + later))
         said = (nxt or {}).get("text", "").strip()
         mic_db = spk_db = corr = lag = None
         if audio is not None:
@@ -192,9 +197,14 @@ def review(d):
         if e["event"] != "turn_end_detected":
             continue
         turn, t = e.get("turn"), e["t_ms"]
-        ep = at("x_endpoint", t - 5, t + 50, turn)
+        # by time: the floor path logs x_endpoint at the turn end, before the turn has a label
+        ep = at("x_endpoint", t - 5, t + 50)
         stop = (ep or {}).get("pause_start_ms") or t
-        heard = (at("final_transcript", t - 2000, t + 4000, turn) or {}).get("text", "")
+        # the floor controller logs the rebuilt question each time it changes: show the last one
+        texts = [x for x in ev if x["event"] == "final_transcript" and x.get("turn") == turn
+                 and t - 2000 <= x["t_ms"] <= t + 20000] if turn is not None else []
+        heard = texts[-1].get("text", "") if texts else \
+            (at("final_transcript", t - 2000, t + 4000, turn) or {}).get("text", "")
         fil = (at("x_filler", t - 50, t + 4000, turn) or {}).get("text", "")
         first = at("first_reply_audio", t - 50, t + 20000, turn)
         content = None

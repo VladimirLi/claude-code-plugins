@@ -19,7 +19,7 @@ Policy (v1):
   floor), and backchannels ("mm-hmm", "yeah", "right") while the assistant is
   still speaking, so the reply goes on instead of restarting.
 - Respond to everything else.
-- Filler: a turn-initial acknowledgement ("Oh okay, got it, so,") that fills
+- Filler (off by default, cfg "fillers"): a turn-initial acknowledgement ("Oh okay, got it, so,") that fills
   the wait until the brain's first sentence is audible, the way people (and
   the reference voice model, "Ah, good follow-up!") open a turn. It is spoken
   only when that wait is long (`expected_content_ms - filler_lead_ms >=
@@ -61,7 +61,8 @@ class Action:
 
 
 DEFAULTS = {
-    "fillers": True,
+    # Off: canned openers ("Oh, so, got it,", "Yeah, so basically,") sounded unnatural in live use.
+    "fillers": False,
     # ms from decide() to the first audible filler sample (TTS start-up for a short text).
     "filler_lead_ms": 150.0,
     # ms from decide() to the first audible sample of the brain's reply, normal turn.
@@ -87,7 +88,15 @@ _BACKCHANNELS = {
     "sure", "got it", "i see", "oh", "ah", "ahh", "cool", "nice", "huh", "wow", "uh hm", "mm hm", "mhmm",
     "alright", "all right", "true", "exactly", "makes sense", "oh okay", "ah okay", "oh i see", "yeah yeah",
     "okay okay", "right right", "mm yeah", "oh nice", "oh wow", "interesting", "go on", "go ahead", "uh yeah",
-    "ok ok", "yeah okay", "okay yeah", "oh right", "ah right", "i see i see",
+    "ok ok", "yeah okay", "okay yeah", "oh right", "ah right", "i see i see", "aha",
+}
+
+# What Whisper-family models write for noise, breath or silence. A final that is only one of
+# these is not words (FLOOR-SPEC.md, "Words"). Compared after turntaking.normalize.
+STT_HALLUCINATIONS = {
+    "you", "thank you", "thanks", "thank you very much", "thanks for watching", "thank you for watching",
+    "thank you so much for watching", "we'll see you next time", "see you next time", "bye", "bye bye",
+    "please subscribe", "subscribe", "like and subscribe", "so", "the", "i", "okay thank you",
 }
 
 # Fillers are composed from two hand-written parts, both fitted to the kind of turn:
@@ -180,14 +189,34 @@ def is_hesitation(norm: str) -> bool:
     return bool(words) and all(w in _HESITATIONS for w in words)
 
 
+_HUM_FOLDS = [(re.compile(r"^m+h+m+$"), "mhm"), (re.compile(r"^h+m+$"), "hmm"), (re.compile(r"^m+$"), "mm"),
+              (re.compile(r"^a+h+$"), "ah"), (re.compile(r"^o+h+$"), "oh")]
+
+
+def fold_hums(norm: str) -> str:
+    """One spelling per hum, however the STT drew it out: "mmmm" -> "mm", "hmmm" -> "hmm",
+    "mmhmm" -> "mhm", "ahhh" -> "ah"."""
+    out = []
+    for w in norm.split():
+        for rx, to in _HUM_FOLDS:
+            if rx.match(w):
+                w = to
+                break
+        out.append(w)
+    return " ".join(out)
+
+
 def is_backchannel(norm: str) -> bool:
+    """`norm` is normalize(text). The one backchannel test (bargein.is_backchannel and the floor
+    controller use it too)."""
+    norm = fold_hums(norm)
     if not norm:
         return False
     if norm in _BACKCHANNELS:
         return True
     words = norm.split()
     # short runs of backchannel tokens ("yeah yeah okay", "mm hmm right")
-    if len(words) <= 4:
+    if len(words) <= 6:
         i = 0
         while i < len(words):
             if i + 1 < len(words) and " ".join(words[i:i + 2]) in _BACKCHANNELS:

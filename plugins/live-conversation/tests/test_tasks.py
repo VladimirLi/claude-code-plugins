@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(PLUGIN, "tests"))
 from live import tasks  # noqa: E402
 from live.brain import Brain  # noqa: E402
 from live.events import FRAME, Clock, EventLog  # noqa: E402
-from live.orchestrator import Components, Orchestrator  # noqa: E402
+from live.orchestrator import ANNOUNCE_CARRY_NOTE, ANNOUNCE_RETRY_NOTE, Components, Orchestrator  # noqa: E402
 from live.turntaking import TurnTaking  # noqa: E402
 from test_orchestrator import FakeAudio, FakeBrain, FakeSTT, FakeTTS, Nop  # noqa: E402
 
@@ -47,6 +47,60 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(cmd, "'/a b/python' '/a b/bin/live-task' --run-dir '/tmp/run dir'")
 
 
+class TestPrivateDirs(unittest.TestCase):
+    def test_task_folder_and_files_are_private(self):
+        old = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                run = os.path.join(tmp, "run")
+                tasks.request(run, "do it")
+                d = os.path.join(run, "tasks")
+                self.assertEqual(os.stat(run).st_mode & 0o777, 0o700)
+                self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+                self.assertEqual(os.stat(os.path.join(d, "1.request.json")).st_mode & 0o777, 0o600)
+        finally:
+            os.umask(old)
+
+    def test_refuses_a_symlink_or_another_users_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "real")
+            os.mkdir(real)
+            link = os.path.join(tmp, "link")
+            os.symlink(real, link)
+            with self.assertRaises(PermissionError):
+                tasks.private_dir(link)
+            uid = os.getuid
+            try:
+                os.getuid = lambda: uid() + 1          # as if another user had made it
+                with self.assertRaises(PermissionError):
+                    tasks.private_dir(real)
+            finally:
+                os.getuid = uid
+
+    def test_daemon_refuses_a_foreign_run_folder(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "real")
+            os.mkdir(real)
+            link = os.path.join(tmp, "link")
+            os.symlink(real, link)
+            plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            r = subprocess.run([sys.executable, "-m", "live", "--run-dir", link], cwd=plugin,
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("is not a folder of this user", r.stderr)
+
+
+class TestSetupCheck(unittest.TestCase):
+    def test_check_needs_rec_and_play(self):
+        # setup installs sox when either tool is missing; --check must not say ready without both
+        plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = open(os.path.join(plugin, "bin", "live-setup")).read()
+        check = src[src.index('if [ "${1:-}" = "--check" ]'):].split("fi", 1)[0]
+        self.assertIn("command -v rec", check)
+        self.assertIn("command -v play", check)
+
+
 class TestBridge(unittest.TestCase):
     def test_handoff_event_then_result(self):
         with tempfile.TemporaryDirectory() as d:
@@ -73,6 +127,40 @@ class TestBridge(unittest.TestCase):
             self.assertTrue(prompt.startswith("[Task 1 finished."))
             self.assertIn("tests pass", prompt)
 
+    def test_a_failing_result_or_poll_is_logged_and_polling_goes_on(self):
+        async def go(d, log):
+            b = tasks.TaskBridge(d, log, poll_s=0.01)
+            polls = {"n": 0}
+            real_poll = b.poll
+
+            def poll():
+                polls["n"] += 1
+                if polls["n"] == 1:
+                    raise OSError("disk hiccup")
+                return real_poll()
+            b.poll = poll
+            seen = []
+
+            def on_result(res):
+                seen.append(res["task"])
+                if len(seen) == 1:
+                    raise ValueError("announce failed")
+            run = asyncio.ensure_future(b.run(on_result))
+            for n in (1, 2):
+                tasks.request(d, f"task {n}")
+                await asyncio.sleep(0.05)
+                with open(os.path.join(d, "tasks", f"{n}.result.json"), "w") as f:
+                    json.dump({"task": n, "reason": "answer", "answer": "ok"}, f)
+                await asyncio.sleep(0.05)
+            run.cancel()
+            return seen
+        with tempfile.TemporaryDirectory() as d:
+            log = EventLog(Clock())
+            seen = asyncio.run(go(d, log))
+            self.assertEqual(seen, [1, 2])                       # the second still came through
+            errors = [e.extra["where"] for e in log.events if e.event == "x_task_error"]
+            self.assertEqual(errors, ["task poll", "task result"])
+
     def test_result_prompt_aborted_and_long(self):
         p = tasks.result_prompt({"task": 3, "reason": "aborted", "text": "x", "answer": "y " * 5000})
         self.assertIn("stopped it", p)
@@ -87,6 +175,29 @@ class TestBrainPrompt(unittest.TestCase):
         self.assertIn('live-task --run-dir /r "the task"', sp)
         self.assertNotIn("Handing work", Brain({"cwd": "/p"}).system_prompt())
 
+    def test_investigations_are_handed_off(self):
+        # bar 20261030-110521 turn 5: "see if there might be any other issues ... from the logs" was
+        # dug into by the voice brain itself; the prompt must name that as work to hand off
+        p = tasks.handoff_prompt("x")
+        self.assertIn("issues in the logs", p)
+        self.assertNotIn("You can still look things up yourself", p)
+        self.assertIn("two tool calls at most", p)
+
+
+
+_FLOOR_ENV = None
+
+
+def setUpModule():
+    # These test the old orchestrator's announce() internals, so they run on the old path whatever LIVE_FLOOR
+    # says; the flag-on counterparts are in test_floor_adapter.py. (Step 6 deletes both.)
+    global _FLOOR_ENV
+    _FLOOR_ENV = os.environ.pop("LIVE_FLOOR", None)
+
+
+def tearDownModule():
+    if _FLOOR_ENV is not None:
+        os.environ["LIVE_FLOOR"] = _FLOOR_ENV
 
 def make():
     log = EventLog(Clock())
@@ -136,6 +247,146 @@ class TestAnnounce(unittest.TestCase):
             t.cancel()
             self.assertEqual(len(o.c.brain.calls), 2)
             self.assertTrue(o.replies[-1].content_started)
+        asyncio.run(go())
+
+    def test_bar_cut_twice_then_spoken_once_not_as_a_repeat(self):
+        # bar session 20261030-110521: the task 5 result was cut twice before any audio, then
+        # spoken as "The investigation came back again with the same finding".
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 5 finished.]")
+            for _ in range(2):
+                while len(o.c.brain.calls) < 1 + _:
+                    await asyncio.sleep(0.02)
+                o._on_speech_start()                            # the user talks before any audio
+                await asyncio.sleep(0.05)
+                o.in_user_turn = False
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertEqual(len(prompts), 3)
+            self.assertEqual(prompts[0], "[Task 5 finished.]")
+            for p in prompts[1:]:
+                self.assertTrue(p.startswith(ANNOUNCE_RETRY_NOTE))
+                self.assertTrue(p.endswith("[Task 5 finished.]"))
+            spoken = [r for r in o.replies if r.announce and r.content_started]
+            self.assertEqual(len(spoken), 1)                    # heard once
+            self.assertFalse(spoken[0].interrupted)             # and completely
+        asyncio.run(go())
+
+    def test_cut_result_rides_on_the_next_reply_and_is_not_said_twice(self):
+        # replay of the bar: the cut result was told in the reply to "All right, let's see if this
+        # works better", then the retry told it a second time.
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 5 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o._on_speech_start()                                # the user talks before any audio
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)                # their turn: "hi"
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertEqual(len(prompts), 2)                   # no third, separate announcement
+            self.assertTrue(prompts[1].startswith(ANNOUNCE_CARRY_NOTE))
+            self.assertIn("[Task 5 finished.]", prompts[1])
+            self.assertTrue(prompts[1].endswith("hi"))
+            self.assertEqual(o.unheard, [])
+            self.assertEqual(len([e for e in log.events if e.event == "x_announce_delivered"]), 1)
+        asyncio.run(go())
+
+    def test_result_heard_in_one_reply_is_not_carried_by_the_next(self):
+        # The user spoke again within announce_quiet_ms of the carrying reply's end: the next reply
+        # carried the same result again, and the brain told it a second time (bar issue 5).
+        async def go():
+            o, log, audio = make()
+            o.ocfg["announce_quiet_ms"] = 800
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 5 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o._on_speech_start()
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)                # "hi" carries the result
+            r1 = o.reply
+            await o.reply_task
+            await asyncio.sleep(0.2)                            # the user talks again 200 ms later
+            o._on_speech_start()
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            await o._handle_turn(o.label, o.gen)
+            await o.reply_task
+            await asyncio.wait_for(a, 5)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertTrue(o._heard(r1))
+            self.assertEqual(sum(p.startswith(ANNOUNCE_CARRY_NOTE) for p in prompts), 1)
+            self.assertEqual(prompts[-1], "hi")
+            self.assertEqual(len([e for e in log.events if e.event == "x_announce_delivered"]), 1)
+        asyncio.run(go())
+
+    def test_carrying_reply_cut_early_does_not_count_as_heard(self):
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.3
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 8 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o._on_speech_start()
+            await asyncio.sleep(0.05)
+            o.in_user_turn = False
+            o.c.brain.reply = "One two three four five six seven eight nine ten."
+            await o._handle_turn(o.label, o.gen)
+            r = o.reply
+            t.cancel()                                          # hold the clock: nothing of it plays
+            while not r.content_started:
+                await asyncio.sleep(0.005)
+            o._barge_in()
+            t = asyncio.ensure_future(ticking(audio))
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            prompts = [c[0] for c in o.c.brain.calls]
+            self.assertEqual(len(prompts), 3)
+            self.assertTrue(prompts[2].startswith(ANNOUNCE_RETRY_NOTE))
+        asyncio.run(go())
+
+    def test_no_retry_once_content_was_heard(self):
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.05
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 6 finished.]")
+            while not (o.reply and o.reply.content_started):
+                await asyncio.sleep(0.01)
+            o._barge_in()                                       # cut after part of it was heard
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            self.assertEqual(len(o.c.brain.calls), 1)
+        asyncio.run(go())
+
+    def test_retry_when_only_a_keepalive_line_was_heard(self):
+        async def go():
+            o, log, audio = make()
+            o.c.brain.delay = 0.5
+            t = asyncio.ensure_future(ticking(audio))
+            a = o.announce("[Task 7 finished.]")
+            while not o.c.brain.calls:
+                await asyncio.sleep(0.01)
+            o.reply.audio_started = True                        # "One moment." played, no content
+            o._barge_in()
+            await asyncio.wait_for(a, 3)
+            t.cancel()
+            self.assertEqual(len(o.c.brain.calls), 2)
+            self.assertTrue(o.c.brain.calls[1][0].startswith(ANNOUNCE_RETRY_NOTE))
         asyncio.run(go())
 
 

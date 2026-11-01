@@ -88,6 +88,39 @@ class RecorderTest(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(tmp, "clips", "feedback-01.wav")))
 
 
+class PrivacyTest(unittest.TestCase):
+    def test_folders_are_0700_and_files_0600(self):
+        old = os.umask(0o022)                      # even under a permissive umask
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                d = os.path.join(tmp, "sessions", "s1")
+                rec = Recorder(d, "/work", {})
+                EventLog(Clock(), listener=rec.on_event).emit("session_start", None, t_ms=0.0)
+                rec.audio(np.zeros(FRAME, np.int16), np.zeros(FRAME, np.int16))
+                rec.close()
+                for p in (d, os.path.dirname(d)):
+                    self.assertEqual(os.stat(p).st_mode & 0o777, 0o700, p)
+                for name in ("session.json", "events.jsonl", "audio.wav"):
+                    self.assertEqual(os.stat(os.path.join(d, name)).st_mode & 0o777, 0o600, name)
+                self.assertTrue(open(os.path.join(d, "events.jsonl")).read().strip())
+        finally:
+            os.umask(old)
+
+    def test_live_record_0_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {k: os.environ.get(k) for k in ("LIVE_RECORD", "LIVE_SESSIONS_DIR")}
+            os.environ["LIVE_RECORD"], os.environ["LIVE_SESSIONS_DIR"] = "0", tmp
+            try:
+                self.assertIsNone(Recorder.open("/work", {}))
+            finally:
+                for k, v in env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+            self.assertEqual(os.listdir(tmp), [])
+
+
 class FillerTest(unittest.TestCase):
     def test_no_praise_fillers(self):
         # First live use: "good question, so" on nearly every turn sounded canned.

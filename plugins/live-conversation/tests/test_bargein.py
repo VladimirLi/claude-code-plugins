@@ -54,6 +54,15 @@ def fricative(ms, db=-22.0):
     return x.astype(np.int16)
 
 
+def rumble(ms, f=35.0, db=-30.0):
+    """Breath on the mic or a bump: a slow 30-40 Hz swell, nothing a voice makes."""
+    t = np.arange(int(SR * ms / 1000)) / SR
+    env = np.sin(np.pi * t / t[-1]) ** 0.5
+    x = env * np.sin(2 * np.pi * f * t) + 0.2 * env * np.sin(2 * np.pi * 2 * f * t)
+    x = x / np.sqrt(np.mean(x * x)) * 32768 * 10 ** (db / 20)
+    return x.astype(np.int16)
+
+
 def run(bi, x, speaking=True, t0=0.0):
     """Feed x frame by frame; returns [(decision, t_ms)]."""
     out = []
@@ -116,7 +125,7 @@ class TestRules(unittest.TestCase):
     def test_speech_soon_after_resume_barges_in(self):
         bi = BargeIn()
         dec = run(bi, np.concatenate([noise(500), hum(300), noise(500), hum(200), noise(500)]))
-        self.assertEqual(kinds(dec), ["duck", "resume", "barge_in"])
+        self.assertEqual(kinds(dec), ["duck", "resume", "duck", "barge_in"])   # stop after rejoin_burst_min_ms
 
     def test_fires_once(self):
         bi = BargeIn()
@@ -138,6 +147,31 @@ class TestRules(unittest.TestCase):
         run(bi, x)
         bi.on_transcript("Wait, what about merge?")
         self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["barge_in"])
+
+    def test_transcript_of_speech_that_ended_before_the_episode_is_ignored(self):
+        # a turn's own final landing during a later click must not turn the click into a barge-in
+        bi = BargeIn()
+        run(bi, np.concatenate([noise(500), hum(200)]))
+        onset = bi.onset_ms
+        bi.on_transcript("What is going on with task two?", onset - 100)
+        self.assertNotIn("barge_in", kinds(run(bi, hum(20), t0=10000)))
+        bi = BargeIn()
+        run(bi, np.concatenate([noise(500), hum(200)]))
+        bi.on_transcript("Wait, what about merge?", bi.onset_ms + 100)
+        self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["barge_in"])
+
+    def test_empty_transcript_resumes(self):
+        # live session: noise the STT heard no words in stopped the reply
+        bi = BargeIn()
+        run(bi, np.concatenate([noise(500), hum(200)]))
+        bi.on_transcript("")
+        self.assertEqual(kinds(run(bi, hum(20), t0=10000)), ["resume"])
+
+    def test_short_sound_after_resume_does_not_barge_in(self):
+        # live session: 40 ms of echo within rejoin_ms of a resume stopped the reply
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(500), hum(300), noise(500), hum(60), noise(500)]))
+        self.assertNotIn("barge_in", kinds(dec))
 
     def test_reply_starting_over_the_user_stops_at_once(self):
         bi = BargeIn()
@@ -164,6 +198,37 @@ class TestNoiseEvents(unittest.TestCase):
         self.assertNotIn("barge_in", kinds(run(bi, x)))
 
 
+class TestRumble(unittest.TestCase):
+    # live session 20261030-110521: a 30-40 Hz rumble at -30..-45 dBFS (all energy below 60 Hz)
+    # stopped three replies, rules "long" twice and "burst" once; nothing was said.
+    def test_long_rumble_does_not_barge_in(self):
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(1500), rumble(700), noise(500)]))
+        self.assertEqual(dec, [])
+
+    def test_two_rumbles_do_not_barge_in(self):
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(1500), rumble(300, db=-38), noise(200), rumble(250, f=30, db=-36),
+                                      noise(500)]))
+        self.assertEqual(dec, [])
+
+    def test_rumble_without_highpass_reproduces_the_live_bug(self):
+        bi = BargeIn({"highpass_hz": 0})
+        dec = run(bi, np.concatenate([noise(1500), rumble(1000), noise(500)]))
+        self.assertIn("barge_in", kinds(dec))
+
+    def test_low_voice_still_barges_in(self):
+        bi = BargeIn()
+        dec = run(bi, np.concatenate([noise(500), hum(900, f0=85.0), noise(500)]))
+        self.assertEqual(kinds(dec), ["duck", "barge_in"])
+
+    def test_voice_over_rumble_still_barges_in(self):
+        bi = BargeIn()
+        x = np.concatenate([noise(1500), vowel(400)])
+        x[1500 * SR // 1000:] += rumble(400, db=-25)
+        self.assertIn("barge_in", kinds(run(bi, x)))
+
+
 class TestAfterInterruptMetric(unittest.TestCase):
     def test_repeat_and_restart(self):
         sys.path.insert(0, os.path.join(PLUGIN, "bench"))
@@ -180,7 +245,8 @@ class TestAfterInterruptMetric(unittest.TestCase):
 
 class TestBackchannelText(unittest.TestCase):
     def test_words(self):
-        for t in ["Mm-hmm.", "Mhm.", "mm hmm", "Uh-huh", "Yeah.", "okay, right", "Hmm."]:
+        for t in ["Mm-hmm.", "Mhm.", "mm hmm", "Uh-huh", "Yeah.", "okay, right", "Hmm.", "Mmmm.", "Hmmm.",
+                  "Aha.", "Mmhmm.", "go ahead", "makes sense", "yeah yeah okay right sure"]:
             self.assertTrue(is_backchannel(t), t)
         for t in ["Wait, wait, how is that different from merge?", "Actually, just give me the short version.",
                   "No, I meant undo it", "", "stop"]:

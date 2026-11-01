@@ -81,7 +81,9 @@ def wer(ref: str, hyp: str) -> tuple[float, int, int]:
 # -- io -------------------------------------------------------------------------------
 def events(d: str) -> list[dict]:
     p = os.path.join(d, "events.jsonl")
-    return [json.loads(l) for l in open(p) if l.strip()] if os.path.exists(p) else []
+    ev = [json.loads(l) for l in open(p) if l.strip()] if os.path.exists(p) else []
+    # turn_end_detected is written out of time order by the floor controller: read by t_ms
+    return sorted(ev, key=lambda e: e.get("t_ms") or 0.0)
 
 
 def transcript(d: str) -> dict:
@@ -150,6 +152,8 @@ def scen(sid):
 def m_endpointing(d, sc):
     ev = events(d)
     ted = sorted(ev_times(ev, "turn_end_detected"))
+    # every endpointer turn end, also one joined into a longer turn (floor controller: x_turn_end)
+    cuts = sorted(ev_times(ev, "x_turn_end")) or ted
     out = []
     for t in sc["turns"]:
         n = t["turn"]
@@ -157,8 +161,8 @@ def m_endpointing(d, sc):
         if not ss or not se:
             continue
         s, e = ss[0], se[0]
-        after = [x for x in ted if e <= x <= e + 3000]
-        out.append({"turn": n, "false_cutoffs": sum(1 for x in ted if s <= x < e),
+        after = [x for x in cuts if e <= x <= e + 3000]
+        out.append({"turn": n, "false_cutoffs": sum(1 for x in cuts if s <= x < e),
                     "endpoint_delay_ms": round(after[0] - e, 1) if after else None,
                     "missed": not after})
     return {"turns": out}
@@ -306,7 +310,9 @@ def m_bargein(d, sc):
     for t in s.get("turns", []):
         if t.get("barge_in") or t.get("backchannel"):
             ss = t["user_speech_start_ms"]
-            ps = [x["t_ms"] for x in ev if x.get("event") == "playback_stopped" and x["t_ms"] >= ss - 20]
+            # the floor controller pauses first (playback_paused); the old path flushes (playback_stopped)
+            ps = [x["t_ms"] for x in ev if x.get("event") in ("playback_paused", "playback_stopped")
+                  and x["t_ms"] >= ss - 20]
             bd = [x["t_ms"] for x in ev if x.get("event") == "barge_in_detected" and x["t_ms"] >= ss - 20]
             # event-based: time the system flushed the speaker (the acoustic stop_delay_ms can be
             # earlier when the interrupted audio happens to pause between phrases)
@@ -329,8 +335,12 @@ def m_bargein(d, sc):
             continue
         ss = t["user_speech_start_ms"]
         stopped = [x for x in ev if x.get("event") == "playback_stopped" and ss <= x["t_ms"] <= ss + 1500]
+        # floor controller: a pause on the backchannel that ended in playback_resumed
+        paused = [x["t_ms"] for x in ev if x.get("event") == "playback_paused" and ss <= x["t_ms"] <= ss + 1500]
+        resumed = paused and any(x.get("event") == "playback_resumed" and x["t_ms"] >= paused[0] for x in ev)
         sd = t.get("stop_delay_ms")
-        t["false_barge_in"] = bool(stopped) or (sd is not None and sd <= 1500 and _new_reply_after(ev, t["turn"]))
+        t["false_barge_in"] = bool(stopped) or bool(resumed) or (sd is not None and sd <= 1500 and
+                                                                _new_reply_after(ev, t["turn"]))
         if sd is not None:
             a = read_wav(os.path.join(d, "assistant.wav"))
             db = frame_db(a)

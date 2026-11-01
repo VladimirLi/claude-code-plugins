@@ -17,6 +17,7 @@ type Task = { n: number; text: string; turnId?: string; state: 'queued' | 'runni
 
 type Daemon = {
   runDir: string
+  python?: string // the daemon's interpreter: /live review runs bin/live-review with it
   cwd: string
   phase: string
   startedAt: number
@@ -32,10 +33,23 @@ let daemon: Daemon | undefined
 const tasks = new Map<number, Task>()
 let expecting: number | undefined // a task prompt is entering the session; its turn starts next
 let lastRecording: string | undefined // kept after /live stops, so feedback and review still work
+let lastPython: string | undefined // the interpreter the last daemon ran with
 
 async function runDirOf($: EngineInterface): Promise<string> {
   const tmp = ((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')
   return `${tmp}/claude-live-conversation/${await $.session.id()}`
+}
+
+// The run folder holds the task files (what the user asked for, the session's answers). Under a
+// /tmp fallback other users share the parent: make both 0700 and refuse a symlink or a folder
+// another user made first.
+export const PRIVATE_DIRS =
+  'for d in "$@"; do [ -L "$d" ] && exit 3; mkdir -p -m 700 "$d" || exit 1; [ -O "$d" ] || exit 2; chmod 700 "$d" || exit 1; done'
+
+async function privateRunDir($: EngineInterface, runDir: string): Promise<boolean> {
+  const parent = runDir.replace(/\/[^/]+$/, '')
+  const r = await $.process.run(['/bin/sh', '-c', PRIVATE_DIRS, 'sh', parent, runDir]).catch(() => undefined)
+  return !!r && r.exitCode === 0
 }
 
 const mark = (n: number) => `[live voice task ${n}]`
@@ -146,6 +160,9 @@ async function startDaemon($: EngineInterface): Promise<string> {
 
   const cwd = await $.session.root()
   const runDir = await runDirOf($)
+  if (!(await privateRunDir($, runDir))) {
+    return `Live conversation did not start: its run folder ${runDir} (or its parent) is a symlink or belongs to another user.`
+  }
   let resolveEnded = () => {}
   const ended = new Promise<void>(r => (resolveEnded = r))
   const d: Daemon = {
@@ -167,6 +184,7 @@ async function startDaemon($: EngineInterface): Promise<string> {
         resolveEnded()
         return
       }
+      d.python = lastPython = python
       d.phase = 'starting'
       $.ui.status('live: starting')
       const child = $.process.spawn({
@@ -254,10 +272,19 @@ async function addFeedback($: EngineInterface, text: string): Promise<string> {
   return `Noted at this moment of the live session: "${text}". /live review goes through all notes.`
 }
 
-export function reviewPrompt(root: string, dir: string): string {
+// bin/live-review runs in the daemon's environment: a dev checkout's .venv or the shared one
+// bin/live-setup builds ($LIVE_VENV, default ~/.claude/live-conversation/venv).
+async function reviewPython($: EngineInterface): Promise<string> {
+  const known = daemon?.python ?? lastPython ?? (await devPython($))
+  if (known) return known
+  const venv = (await $.env.get('LIVE_VENV')) || `${(await $.env.get('HOME')) ?? '~'}/.claude/live-conversation/venv`
+  return `${venv}/bin/python`
+}
+
+export function reviewPrompt(root: string, dir: string, python: string): string {
   return (
     `Review the recorded live voice session in ${dir} and improve the live-conversation plugin (${root}).\n\n` +
-    `1. Run: "${root}/.venv/bin/python" "${root}/bin/live-review" "${dir}" and read the report.\n` +
+    `1. Run: "${python}" "${root}/bin/live-review" "${dir}" and read the report.\n` +
     '2. For each of my feedback notes, each barge-in marked FALSE? and each odd turn, find the cause in the events ' +
     'and the code (live/*.py). The clips in clips/ are stereo: left is my microphone, right is what the speaker played.\n' +
     '3. Tell me, in plain words, what went wrong and the fix you propose for each. Do not change code yet; ' +
@@ -301,8 +328,9 @@ export const register: Register = on => {
     if (arg === 'review') {
       const dir = daemon?.recording ?? lastRecording
       if (!dir) return { text: 'No recorded live session yet. Start one with /live.' }
+      const python = await reviewPython($)
       // from a timer: a prompt submitted inside this command would wait on the command itself
-      $.clock.after(0, () => void $.prompt.submit({ text: reviewPrompt($.plugin.root, dir) }))
+      $.clock.after(0, () => void $.prompt.submit({ text: reviewPrompt($.plugin.root, dir, python) }))
       return { text: `Reviewing ${dir}.` }
     }
     if (arg === 'stop' || (arg === '' && daemon)) return { text: await stopDaemon($) }

@@ -84,6 +84,11 @@ class Sink:
         self.reply_turn: Optional[int] = None
         self._first_logged: set = set()
         self._was_playing = False
+        # floor controller (FLOOR-SPEC.md): it logs first_reply_audio itself, pauses and ducks
+        self.log_first_audio = True
+        self.paused = False
+        self.gain_db = 0.0
+        self.tags: list = []        # (start, end, tag) of each tagged write, in write order
 
     def _ensure(self, n: int) -> None:
         if n > len(self.buf):
@@ -95,36 +100,74 @@ class Sink:
     def queued_end_ms(self) -> float:
         return self.queued_end * 1000.0 / SR
 
-    def write(self, pcm: np.ndarray, turn: Optional[int] = None, filler: bool = False) -> float:
+    def write(self, pcm: np.ndarray, turn: Optional[int] = None, filler: bool = False,
+              tag=None) -> float:
+        """Queue pcm after what is queued. `tag` (e.g. (rid, piece)) is reported by tag_at."""
         start = max(self.clock.samples, self.queued_end)
         n = len(pcm)
         self._ensure(start + n)
         self.buf[start:start + n] = pcm
         self.queued_end = start + n
         self.reply_turn = turn
-        if turn not in self._first_logged and n:
+        if tag is not None and n:
+            self.tags.append((start, start + n, tag))
+            if len(self.tags) > 512:
+                del self.tags[:256]
+        if self.log_first_audio and turn not in self._first_logged and n:
             self._first_logged.add(turn)
             self.log.emit("first_reply_audio", turn, t_ms=start * 1000.0 / SR, filler=filler)
         self._was_playing = True
         return start * 1000.0 / SR
 
     def flush(self, spoken_text: Optional[str] = None) -> None:
-        now = self.clock.samples
-        if self.queued_end > now:
-            self.buf[now:self.queued_end] = 0
-        self.queued_end = min(self.queued_end, now)
+        self._drop_queued()
+        self.paused = False
         self._was_playing = False
         extra = {} if spoken_text is None else {"spoken_text": spoken_text}
         self.log.emit("playback_stopped", self.reply_turn, **extra)
 
+    def _drop_queued(self) -> None:
+        now = self.clock.samples
+        if self.queued_end > now:
+            self.buf[now:self.queued_end] = 0
+        self.queued_end = min(self.queued_end, now)
+        self.tags = [(a, min(b, now), t) for a, b, t in self.tags if a < now]
+
+    def pause(self) -> None:
+        """Stop at once and drop what is queued, but stay 'playing' (is_playing) and emit nothing:
+        the caller keeps the audio and writes it again from where it wants after resume()."""
+        self._drop_queued()
+        self.paused = True
+
+    def resume(self) -> None:
+        self.paused = False
+
+    def drop(self) -> None:
+        """A stopped reply: drop what is queued and stop, with no event (the floor controller logs
+        playback_stopped) and no reply_audio_end later."""
+        self._drop_queued()
+        self.paused = False
+        self._was_playing = False
+
+    def tag_at(self, sample: int):
+        """(tag, samples into that write) of the tagged write that holds `sample`, or None."""
+        for a, b, t in reversed(self.tags):
+            if a <= sample < b:
+                return t, sample - a
+        return None
+
     def is_playing(self) -> bool:
-        return self.queued_end > self.clock.samples
+        return self.paused or self.queued_end > self.clock.samples
 
     def tick(self, start: int, n: int) -> np.ndarray:
-        """Samples heard in [start, start+n). Called by the mic loop once per frame."""
+        """Samples heard in [start, start+n). Called by the mic loop once per frame. The duck gain
+        is applied to these samples as they play, so the buffer keeps what was heard."""
         self._ensure(start + n)
+        if self.gain_db != 0.0 and self.queued_end > start:
+            seg = self.buf[start:start + n].astype(np.float64) * 10 ** (self.gain_db / 20)
+            self.buf[start:start + n] = np.clip(np.round(seg), -32768, 32767).astype(np.int16)
         out = self.buf[start:start + n].copy()
-        if self._was_playing and self.queued_end <= start + n:
+        if self._was_playing and not self.paused and self.queued_end <= start + n:
             self._was_playing = False
             self.log.emit("reply_audio_end", self.reply_turn, t_ms=self.queued_end * 1000.0 / SR)
         return out
@@ -175,7 +218,12 @@ class FileAudio:
     END_AFTER_REPLY_S = 3.0
 
     def __init__(self, scenario_dir: str, log: EventLog, realtime: bool = True,
-                 noise_path: Optional[str] = None) -> None:
+                 noise_path: Optional[str] = None, echo_gain_db: Optional[float] = None,
+                 echo_delay_ms: float = 30.0) -> None:
+        # echo_gain_db: mix the sink's output back into the mic this far below it, echo_delay_ms
+        # late (a laptop speaker into its mic). None = headphones, no echo.
+        self.echo_gain_db = echo_gain_db
+        self.echo_delay = int(echo_delay_ms * SR / 1000)
         self.dir = scenario_dir
         self.sc = json.load(open(os.path.join(scenario_dir, "scenario.json")))
         self.turns = self.sc["turns"]
@@ -315,10 +363,21 @@ class FileAudio:
             heard = self.sink.tick(pos, FRAME)
             for tr in self._trackers.values():
                 tr.feed(heard, pos)
+            if self.echo_gain_db is not None:
+                frame = self._add_echo(frame, pos)
             self.mic_chunks.append(frame)
             self.clock.advance(FRAME)
             yield frame
             self._check_end(self.clock.samples)
+
+    def _add_echo(self, frame: np.ndarray, pos: int) -> np.ndarray:
+        a = pos - self.echo_delay
+        src = np.zeros(FRAME, dtype=np.float64)
+        lo = max(a, 0)
+        if lo < a + FRAME:
+            src[lo - a:] = self.sink.heard(a + FRAME)[lo:a + FRAME]
+        mixed = frame.astype(np.float64) + src * 10 ** (self.echo_gain_db / 20)
+        return np.clip(np.round(mixed), -32768, 32767).astype(np.int16)
 
     def save(self, out_dir: str) -> None:
         mic = np.concatenate(self.mic_chunks) if self.mic_chunks else np.zeros(0, np.int16)
