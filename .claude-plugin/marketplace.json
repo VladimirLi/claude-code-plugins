@@ -58,6 +58,19 @@
       ]
     },
     {
+      "name": "jev-browser",
+      "source": "./plugins/jev-browser",
+      "description": "Fast browser tools: a warm dedicated Chrome over raw CDP, Jev picks each step; MCP tools and the jevb CLI",
+      "category": "productivity",
+      "keywords": [
+        "browser",
+        "automation",
+        "cdp",
+        "jev",
+        "mcp"
+      ]
+    },
+    {
       "name": "live-conversation",
       "source": "./plugins/live-conversation",
       "description": "Talk to Claude Code by voice in a live, interruptible conversation; /live starts it, and coding tasks go to your session",

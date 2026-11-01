@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "jev-browser",
+  "version": "0.1.0",
+  "description": "Lets the jev-browser daemon (Claude Code plugin) drive tabs it opens in this Chrome, over chrome.debugger.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6z7u7TLtYUJufcnG6mpzwpd7lQBAGoXCd5FDiOYf2podVI7pYPpwaSLfxEhCozi9OfOd3beZ158ggI/n/p6paUN8fcA3zyifJolXVa8vM8ucj8JqGvaEaMKW7OKGMmkTOfdJdGUNvYR8zadaBv32erbar4Tu8GxpSAkKAM+BxIgJNO+tToDO2Kg226IZl4NHktoPSt1nFZTKw4NZViSR0NKCK1cgVRxqc7ZPp4yEEjNuKwiX994bnSr3b6IrCrOXK8phKhUWm4KRa4OiehyCJsj3LvHyWr4A/DnYp6bdRT5dfHFA9IOPql4/FK18zt0+GA5DmFLdXyM9u90hElvNkwIDAQAB",
+  "minimum_chrome_version": "118",
+  "permissions": ["debugger", "tabs", "storage", "alarms", "webNavigation"],
+  "background": { "service_worker": "sw.js", "type": "module" },
+  "action": { "default_title": "jev-browser", "default_popup": "popup.html" }
+}
