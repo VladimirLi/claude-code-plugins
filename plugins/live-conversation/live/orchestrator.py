@@ -34,19 +34,29 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 
-from .bargein import BargeIn
+from .bargein import BargeIn, is_backchannel
 from .brain import Brain, Interrupted
 from .endpointing import Endpointer
 from .events import SR, EventLog
 from .stt import BaseSTT
 from .tts import Chunker
-from .turntaking import TurnContext, TurnTaking
+from .turntaking import TurnContext, TurnTaking, is_hesitation, normalize
+
+# Hums and breaths a transcript renders as a word ("Hmm.", "Mm.", "Ah."): no words for the hold.
+_HUMS = {"hm", "hmm", "hmmm", "mm", "mmm", "mhm", "mhmm", "ah", "ahh", "oh", "ohh"}
+
+
+def _no_words(text: str) -> bool:
+    """True when a segment's text says nothing: empty, hesitation, or a hum ("Hmm.", "Mm-hmm")."""
+    words = normalize(text or "").split()
+    return all(w in _HUMS or is_hesitation(w) for w in words)
 
 KEEPALIVE = ["Still on it.", "Hang on.", "Almost there.", "Still going.", "Bear with me.", "Nearly done."]
 
@@ -65,9 +75,29 @@ DEFAULTS = {
     # short holding line, then again after keepalive_every_ms; 0 = off
     "keepalive_after_ms": 4500.0,
     "keepalive_every_ms": 9000.0,
+    # at a turn end, run the TTS model once on a throwaway piece so the reply's first piece
+    # does not pay for a model gone cold while the user talked (tts.warm)
+    "warm_tts": True,
     # announce(): speak only after the conversation was free (no user speech, no reply) this long
-    "announce_quiet_ms": 800.0,        # play the predicted filler at the turn end, not after the final transcript   # the brain hears which filler opened the reply, so it does not acknowledge twice
+    "announce_quiet_ms": 800.0,
+    # a reply held on sound after the turn (_hold) plays anyway after this long unless the sound's
+    # interim text had words: a wordless noise segment lasted 3-4 s in session 20261030-110521,
+    # and waiting for its end and final transcript cost 5 s of silence. 0 = wait for the final.
+    "hold_max_ms": 1500.0,
+    # a barge-in that stopped a filler with no speech_start after it this long (a 40-59 ms "eh" or
+    # click is too short for the endpointer): the question it kept as carry is answered. 0 = off.
+    "short_bargein_ms": 800.0,
 }
+
+
+async def close_all(log: EventLog, c) -> None:
+    """Close brain, STT and TTS, each even if another one raised (its claude processes, the
+    microphone and the speech model must not be left running)."""
+    for name in ("brain", "stt", "tts"):
+        try:
+            await getattr(c, name).close()
+        except Exception as e:
+            log.emit("x_task_error", None, where=f"{name} close", error=f"{type(e).__name__}: {e}"[:300])
 
 
 @dataclass
@@ -78,6 +108,19 @@ class Components:
     tts: object
     bargein: BargeIn
     turntaking: TurnTaking
+
+
+# announce(): sent before the prompt when an earlier try was cut before the user heard any of it
+ANNOUNCE_RETRY_NOTE = ('[Not heard yet: the message below reached you before, but the user started talking '
+                       'before any of your answer to it was spoken, so they have not heard it. It is the same '
+                       'single message, not a new or second one. Tell them now as if for the first time; '
+                       'don\'t say "again", "still", "same" or "came back".]')
+
+# a user-turn reply while an announcement was cut before the user heard it: deliver it in this reply
+ANNOUNCE_CARRY_NOTE = ('[Not told yet: the user started talking before you said anything about the message '
+                       'below, so they have not heard it. It is the same single message as before, not a new '
+                       'one. In this reply, answer what the user says now and tell them that outcome briefly, '
+                       'once, as news; don\'t say "again", "still", "same" or "came back".]')
 
 
 @dataclass
@@ -95,6 +138,16 @@ class Reply:
     decided_ms: float = 0.0                        # session clock when the reply was decided
     after_interrupt: bool = False
     announce: bool = False                         # not an answer to a user turn (announce())
+    gen: int = 0                                   # the segment whose final made the reply
+    # Set while the user made a sound after their turn ended and before any reply audio: the reply
+    # keeps going but plays nothing until that sound's transcript says whether it was words.
+    held: Optional[asyncio.Event] = None
+    held_gen: int = 0                              # the latest segment the reply waits on
+    held_since: float = 0.0                        # session clock when the hold began
+    held_words: bool = False                       # an interim of the held sound had words
+    released_gen: int = -1                         # segment whose hold ran out (hold_max_ms) before its final
+    released_ms: float = 0.0                       # session clock when that hold ran out
+    carries: list = field(default_factory=list)    # unheard announcements this reply delivers
 
 
 @dataclass
@@ -106,6 +159,16 @@ class _Prediction:
 
 
 class Orchestrator:
+    def __new__(cls, audio=None, log=None, c=None, cfg: Optional[dict] = None):
+        # FLOOR-SPEC.md step 4: `orchestrator.floor: true` runs the floor controller's adapter
+        # instead of this class; every caller keeps constructing Orchestrator. LIVE_FLOOR=1 turns
+        # it on where the config does not say.
+        ocfg = (cfg or {}).get("orchestrator") or {}
+        if cls is Orchestrator and ocfg.get("floor", os.environ.get("LIVE_FLOOR") == "1"):
+            from .floor_adapter import FloorAdapter
+            return FloorAdapter(audio, log, c, cfg)
+        return super().__new__(cls)
+
     def __init__(self, audio, log: EventLog, c: Components, cfg: Optional[dict] = None) -> None:
         self.audio = audio
         self.log = log
@@ -121,6 +184,11 @@ class Orchestrator:
         self.reply: Optional[Reply] = None
         self.reply_task: Optional[asyncio.Task] = None
         self.pending_interrupt: Optional[Interrupted] = None
+        self.unheard: list[dict] = []                  # announcements cut before any content: {prompt, by: replies}
+        self.finals: dict[int, str] = {}               # segment gen -> its final text, once it came back
+        self.cut_released: Optional[Reply] = None      # a released reply stopped by a barge-in in its own segment
+        self.finals_pending = 0                        # turns that ended and wait on their final transcript
+        self.words_gens: set = set()                   # segments whose interim text had words
         self.tasks: set = set()
         self.user_turns: dict = {}
         self.replies: list[Reply] = []
@@ -132,6 +200,7 @@ class Orchestrator:
         self.stats: list[dict] = []                    # per reply: how the first audio was obtained (debug)
         try:
             self.c.stt.on_interim = self._on_interim
+            self.c.stt.on_event = lambda name, fields: self.log.emit(name, self.label, **fields)
         except Exception:
             pass
         try:
@@ -178,7 +247,8 @@ class Orchestrator:
         await asyncio.gather(synth_heads(), warm_probe())
 
     def _interjections(self) -> list[str]:
-        return self._filler_heads() + (KEEPALIVE if self.ocfg["keepalive_after_ms"] else [])
+        fillers = getattr(self.c.turntaking, "cfg", {}).get("fillers", True)     # off: no filler to warm (~2.4 s)
+        return (self._filler_heads() if fillers else []) + (KEEPALIVE if self.ocfg["keepalive_after_ms"] else [])
 
     def _filler_heads(self) -> list[str]:
         from . import turntaking as ttm
@@ -195,15 +265,19 @@ class Orchestrator:
             t.cancel()
         for t in self.pcm.values():
             t.cancel()
-        await self.c.brain.close()
-        await self.c.stt.close()
-        await self.c.tts.close()
+        await close_all(self.log, self.c)
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
         self.tasks.add(t)
-        t.add_done_callback(self.tasks.discard)
+        t.add_done_callback(self._task_done)
         return t
+
+    def _task_done(self, t: asyncio.Task) -> None:
+        self.tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            e = t.exception()
+            self.log.emit("x_task_error", None, error=f"{type(e).__name__}: {e}"[:300])
 
     # -- mic loop ------------------------------------------------------------
     def _assistant_holds_floor(self) -> bool:
@@ -233,9 +307,18 @@ class Orchestrator:
                     self.log.emit("turn_end_detected", self.label, source=d.source)
                     self._log_endpoint()
                     self._early_filler(self.label)
+                    self._warm_tts()                # after: a filler started there goes first
                     self._spawn(self._handle_turn(self.label, self.gen))
         # let a reply in flight finish its bookkeeping
         await asyncio.sleep(0)
+
+    def _warm_tts(self) -> None:
+        """Turn end: get the TTS model hot while the brain thinks (tts.warm), unless audio is
+        being made or played (then it is hot already, and a warm-up would queue in front)."""
+        warm = getattr(self.c.tts, "warm", None)
+        if warm is None or not self.ocfg["warm_tts"] or self.sink.is_playing() or self._reply_in_flight():
+            return
+        self._spawn(warm())
 
     def _log_endpoint(self) -> None:
         tr = getattr(self.c.endpointer, "trace", None)
@@ -255,10 +338,11 @@ class Orchestrator:
             self._cancel_reply(keep_record=False)   # announce() tries again once the user is done
             r = None
         if r is not None and not r.audio_started and self.reply_task and not self.reply_task.done():
-            # User kept talking before any reply audio: merge into one turn.
+            # Sound before any reply audio. The reply is held, not cancelled: only words in this
+            # segment's transcript merge the two parts into one turn (_handle_turn). Noise, a
+            # breath or a click (no words) lets the held reply play, so it is not restarted.
             if self.c.turntaking.on_user_resumed(TurnContext(r.user_text)) == "merge":
-                self.carry = r.user_text
-                self._cancel_reply(keep_record=False)
+                self._hold(r)
                 self.label = hint if hint is not None else self.label
                 self.c.stt.begin()
                 return
@@ -275,6 +359,14 @@ class Orchestrator:
             self.c.endpointer.on_transcript(text, False)
         except Exception:
             pass
+        if not _no_words(text):
+            self.words_gens.add(self.gen)
+            for g in [g for g in self.words_gens if g < self.gen - 20]:
+                self.words_gens.discard(g)
+        r = self.reply
+        if r is not None and r.held is not None and not r.held_words and r.held_gen == self.gen:
+            if not _no_words(text):
+                r.held_words = True     # likely words: keep holding until the final says so
         if not self.in_user_turn or not self.ocfg["predict_filler"] or self._assistant_holds_floor():
             return                      # (a prefetch would queue in front of the reply's next sentence)
         full = (self.carry + " " + text).strip() if self.carry else text
@@ -353,6 +445,7 @@ class Orchestrator:
         at once and the rest follows. The final transcript and the brain follow in _handle_turn."""
         if not self.ocfg["early_filler"] or self.sink.is_playing():
             return
+        self._new_reply_audio(label)
         tr = getattr(self.c.endpointer, "trace", None)
         tail = (tr[-1].get("text") or "") if tr and isinstance(tr[-1], dict) else ""
         p = self.prediction
@@ -385,6 +478,14 @@ class Orchestrator:
         e["task"] = self._spawn(self._play_early(e))
         self.early = e
 
+    def _new_reply_audio(self, label: Optional[int]) -> None:
+        """A new reply starts for `label`: its first audio is logged (first_reply_audio) even when an
+        earlier reply under the same label played (a hold keeps the label over a later sound, and
+        a reply cut on that sound is asked again under it). Else its wait is not scored."""
+        logged = getattr(self.sink, "_first_logged", None)
+        if logged is not None:
+            logged.discard(label)
+
     def _probe_covers(self, tail: str) -> Optional[str]:
         """The probe text, if it holds the whole utterance (the probe sends the last 3.5 s)."""
         if not tail.strip() or self.clock.ms - self.turn_start_ms > float(self.ocfg["probe_window_ms"]):
@@ -414,12 +515,12 @@ class Orchestrator:
         self.early = None
         return e
 
-    async def _final_later(self, label: Optional[int], carry: str, probe_full: str) -> None:
+    async def _final_later(self, label: Optional[int], carry: str, probe_full: str, end_ms: float) -> None:
         text = await self.c.stt.finalize()
         full = (carry + " " + text).strip() if carry else text
         self.log.emit("final_transcript", label, text=full)
         self.c.endpointer.on_transcript(full, True)
-        self.c.bargein.on_transcript(full)
+        self.c.bargein.on_transcript(full, end_ms)
         if self.user_turns.get(label) == probe_full:
             self.user_turns[label] = full
         elif self.carry == probe_full:
@@ -438,25 +539,133 @@ class Orchestrator:
         return a, early.get("source", "early")
 
     async def _handle_turn(self, label: Optional[int], gen: int) -> None:
+        # The turn's speech ended by now: a barge-in episode that opens later is other sound
+        # (a click over the filler), and this turn's final must not settle it (bargein.on_transcript).
+        end_ms = self.clock.ms
         e = self.early if self.early is not None and self.early["label"] == label else None
-        if e is not None and e.get("probe") and self.ocfg["brain_on_probe"] and not e["flushed"]:
+        cut = self.cut_released
+        cut_here = cut is not None and cut.released_gen == gen
+        if (e is not None and e.get("probe") and self.ocfg["brain_on_probe"] and not e["flushed"]
+                and not cut_here):
+            # (not on the sound a released reply was cut by: its final, not the on-device probe that
+            # hears "Thank you." in noise, says whether the question needs asking again)
             # Short turn: the endpointer's on-device transcript already holds all of it. The brain
             # starts on it now; the final transcript (Azure, ~300 ms later) is logged when it lands.
             text = e["probe"]
             full = (self.carry + " " + text).strip() if self.carry else text
-            self._spawn(self._final_later(label, self.carry, full))
+            self._spawn(self._final_later(label, self.carry, full, end_ms))
         else:
-            text = await self.c.stt.finalize()
+            # The turn is not over for announce() until its final says what it was (_free).
+            self.finals_pending += 1
+            try:
+                text = await self.c.stt.finalize()
+            finally:
+                self.finals_pending -= 1
             full = (self.carry + " " + text).strip() if self.carry else text
             self.log.emit("final_transcript", label, text=full)
             self.c.endpointer.on_transcript(full, True)
-            self.c.bargein.on_transcript(full)
+            self.c.bargein.on_transcript(full, end_ms)
+        self.finals[gen] = text
+        for g in [g for g in self.finals if g < gen - 20]:
+            del self.finals[g]
         early = self._take_early(label)
-        if gen != self.gen or (early is not None and early["flushed"]):
+        rr = self.reply
+        if cut_here and rr is None and self.cut_released is cut:
+            # The reply was let go over this segment's sound (hold_max_ms) and a barge-in in the same
+            # segment stopped it. The final says what that sound was: no words, the question still
+            # needs its answer; words, one turn with the question, as before any reply audio.
+            self.cut_released = None
+            words = not _no_words(text)
+            self.log.emit("x_resume", label, decision="cut_merged" if words else "cut_reasked", text=text)
+            full = (cut.user_text + " " + full).strip() if words else cut.user_text
+            if cut.turn is not None and cut.turn != label:
+                self.user_turns.pop(cut.turn, None)
+            # (an early filler that played on this segment's end stays: it opens the answer)
+        held = rr if (rr is not None and (rr.held is not None or rr.released_gen == gen)) else None
+        if (held is not None and early is None and held.held is None and held.audio_started
+                and held.released_gen == gen):
+            # Released over this segment's sound and playing (or played). The final has words now.
+            # A backchannel ("okay") or a final that comes after the whole reply was heard is not
+            # an interruption of it: the reply stands, and a new question is a turn of its own.
+            if not _no_words(text) and is_backchannel(text):
+                self.log.emit("x_resume", label, decision="kept", text=text)
+                return
+            if (self.reply_task is None or self.reply_task.done()) and not self.sink.is_playing():
+                held.released_gen = -1
+                if label == held.turn and self.audio.turn_hint() is None:
+                    self.counter += 1           # the hold kept the reply's label; this is a new turn
+                    label = self.label = self.counter
+                    # its turn end was logged under the old label: log it for this turn too, so the
+                    # wait to this reply's first sound is scored (bin/live-review matches by turn)
+                    self.log.emit("turn_end_detected", label, t_ms=end_ms, source="relabel")
+                held = None
+        if held is not None and early is None:
+            if _no_words(text):
+                # No words: the user did not go on. The held reply stands. It plays once every
+                # segment it waits on has its final: a newer one that started, or an older one
+                # whose final is still on its way (finals can come back out of order) may have words.
+                self.log.emit("x_resume", label, decision="kept", text=text)
+                if held.held_gen == self.gen and all(
+                        g in self.finals for g in range(max(held.gen + 1, held.held_gen - 20), held.held_gen + 1)):
+                    self._release(held)
+                return
+            # Words: one turn, as before any reply audio.
+            self.log.emit("x_resume", label, decision="merged", text=text)
+            full = (held.user_text + " " + full).strip()
+            if held.turn is not None and held.turn != label:
+                self.user_turns.pop(held.turn, None)
+            if held.audio_started:
+                # it began to play when its hold ran out (hold_max_ms): stop it, the brain hears what was said
+                spoken = self._spoken_so_far(held)
+                self.sink.flush(spoken_text=spoken)
+                held.interrupted, held.text_spoken = True, spoken
+                self.pending_interrupt = Interrupted(spoken)
+            self._cancel_reply(keep_record=False)
+            self.reply_task = None
+        lr = self.reply
+        if (gen != self.gen and early is None and _no_words(text) and lr is not None and lr.gen > gen
+                and not lr.announce):
+            # A late final of an older sound with no words, after a newer segment's final already
+            # made the current reply: nothing to add, and that reply must not be asked again.
+            self.log.emit("x_resume", label, decision="kept", text=text)
+            return
+        if gen != self.gen and early is None and all(g in self.finals for g in range(gen + 1, self.gen + 1)):
+            # Every newer segment's final came back before this one (a short noise returns '' at
+            # once while this turn's tail is still being transcribed). Nothing would release a hold
+            # on them, so this turn is the current one; words in them join it.
+            later = " ".join(self.finals[g] for g in range(gen + 1, self.gen + 1) if not _no_words(self.finals[g]))
+            if (lr is not None and lr.turn == label and lr.gen > gen and not lr.announce
+                    and not _no_words(text)):
+                # A newer segment's words were already merged into this turn's reply (the question
+                # before them included): this older segment's words go between them.
+                prev = lr.user_text
+                if later and prev.endswith(later):
+                    prev = prev[: len(prev) - len(later)].strip()
+                full = (prev + " " + text).strip()
+            if later:
+                full = (full + " " + later).strip()
+                if lr is not None and lr.turn != label and not lr.audio_started:
+                    if lr.turn is not None:
+                        self.user_turns.pop(lr.turn, None)
+                    self._cancel_reply(keep_record=False)
+                    self.reply_task = None
+            gen = self.gen
+        hold_gen = None
+        if (gen != self.gen and early is None
+                and self.c.turntaking.on_user_resumed(TurnContext(full)) == "merge"):
+            # The user made a sound while this turn's transcript was on its way: start the reply
+            # anyway, held until that sound's transcript says whether it was words.
+            hold_gen = self.gen
+        if (gen != self.gen and hold_gen is None) or (early is not None and early["flushed"]):
             if early is not None and not early["flushed"]:
                 self._stop_early(early)
             self.carry = full          # user is speaking again; merge on next turn end
             return
+        self._answer(label, gen, full, early, hold_gen)
+
+    def _answer(self, label: Optional[int], gen: int, full: str, early: Optional[dict] = None,
+                hold_gen: Optional[int] = None) -> None:
+        """Decide on the turn's text and start its reply."""
         self.carry = ""
         self.user_turns[label] = full
         if early is not None:
@@ -467,14 +676,24 @@ class Orchestrator:
             if early is not None:
                 self._stop_early(early)
             return
-        if self.reply_task and not self.reply_task.done():
+        inflight = self.reply if self.reply_task and not self.reply_task.done() else None
+        if inflight is not None:
             self._cancel_reply(keep_record=True)
-        r = Reply(label, full, decided_ms=early["t_ms"] if early else self.clock.ms)
+        r = Reply(label, full, decided_ms=early["t_ms"] if early else self.clock.ms, gen=gen)
+        if early is None:
+            self._new_reply_audio(label)
+        # an announcement an earlier reply already told (heard, and done playing) is not news again
+        r.carries = [u for u in self.unheard
+                     if not any(x is not inflight and self._heard(x) for x in u["by"])]
+        for u in r.carries:
+            u["by"].append(r)
         if early is not None:
             r.fillers.append(early["filler"])
             r.sentences.append(early["filler"])
             r.writes = early["writes"]                  # the split filler may still be writing
             r.audio_started = True
+        if hold_gen is not None:
+            self._hold(r, hold_gen)
         self.reply = r
         self.replies.append(r)
         interrupted, self.pending_interrupt = self.pending_interrupt, None
@@ -491,6 +710,7 @@ class Orchestrator:
                      pre: Optional[asyncio.Task] = None) -> None:
         order: asyncio.Queue = asyncio.Queue()
         synth_tasks: list[asyncio.Task] = []
+        piece_logged: list = []
 
         def speak(text: str, is_filler: bool = False, ready: Optional[list] = None) -> None:
             q: asyncio.Queue = asyncio.Queue()
@@ -501,9 +721,16 @@ class Orchestrator:
                     q.put_nowait(pcm)
                 q.put_nowait(None)
             else:
+                queued_ms = self.clock.ms
+
                 async def fill():
                     try:
                         async for pcm in self.c.tts.synthesize(text):
+                            if not is_filler and not piece_logged:
+                                # first content piece: when the chunker released it, when its audio was ready
+                                piece_logged.append(True)
+                                self.log.emit("x_first_piece", r.turn, text=text, queued_ms=queued_ms,
+                                              audio_ready_ms=self.clock.ms)
                             q.put_nowait(pcm)
                     finally:
                         q.put_nowait(None)
@@ -515,6 +742,9 @@ class Orchestrator:
         prompt = (f'[Already spoken aloud as the first words of this reply: "{said}" Do not repeat, echo or '
                   f'rephrase those words, and do not acknowledge again; otherwise reply as you normally '
                   f'would.] {r.user_text}') if said else r.user_text
+        if r.carries and not r.announce:
+            prompt = " ".join([ANNOUNCE_CARRY_NOTE] + [u["prompt"] for u in r.carries]
+                              + ["[What the user says now:]", prompt])
 
         async def produce():
             chunker = Chunker()
@@ -522,6 +752,9 @@ class Orchestrator:
             async for delta in self.c.brain.respond(prompt, interrupted):
                 if first:
                     self.log.emit("first_reply_text", r.turn, text=delta)
+                    timing = getattr(self.c.brain, "last_timing", None)
+                    if timing:
+                        self.log.emit("x_brain", r.turn, **timing)
                     first = False
                 r.text_generated += delta
                 for s in chunker.push(delta):
@@ -547,6 +780,7 @@ class Orchestrator:
                     pcm = await q.get()
                     if pcm is None:
                         break
+                    await self._unheld(r)
                     start = self.sink.write(pcm, turn=r.turn, filler=is_filler)
                     if not is_filler and not r.content_started:
                         r.content_started = True
@@ -581,7 +815,7 @@ class Orchestrator:
         while True:
             await asyncio.sleep(0.1)
             now = self.clock.ms
-            if self.sink.is_playing() or not order.empty():
+            if self.sink.is_playing() or not order.empty() or r.held is not None:
                 quiet_since = max(now, self.sink.queued_end_ms)
                 continue
             if now - quiet_since < after or now - last_said < every:
@@ -592,6 +826,8 @@ class Orchestrator:
             idx = len(r.sentences)
             r.sentences.append(line)
             async for pcm in self.c.tts.synthesize(line):
+                # the user may have gone on while the line was made: it waits out the hold like the reply
+                await self._unheld(r)
                 start = self.sink.write(pcm, turn=r.turn, filler=True)
                 r.audio_started = True
                 r.writes.append((idx, start, len(pcm) * 1000.0 / SR))
@@ -641,6 +877,50 @@ class Orchestrator:
             break
         return " ".join(out)
 
+    def _hold(self, r: Reply, gen: Optional[int] = None) -> None:
+        """Keep the reply going but play none of it until _release (see _on_speech_start)."""
+        gen = self.gen if gen is None else gen
+        if r.held is None:
+            r.held = asyncio.Event()
+            self.log.emit("x_resume", r.turn, decision="hold")
+        elif gen == r.held_gen:
+            return
+        # The cap and the words flag are per sound: a new segment that re-holds the reply starts them
+        # again (its own interim text, also one that came before the hold, says whether it had words).
+        r.held_since = self.clock.ms
+        r.held_words = gen in self.words_gens
+        r.held_gen = gen
+
+    def _release(self, r: Reply) -> None:
+        if r.held is not None:
+            r.held.set()
+            r.held = None
+
+    async def _unheld(self, r: Reply) -> None:
+        """Wait out a hold. Past hold_max_ms with no words in the held sound's interim text, play:
+        noise can last seconds, and its final transcript only comes after it ends."""
+        cap = float(self.ocfg["hold_max_ms"])
+        while r.held is not None:
+            ev = r.held
+            left = (r.held_since + cap - self.clock.ms) / 1000.0
+            if cap <= 0 or r.held_words:
+                await ev.wait()
+            elif left <= 0:
+                self.log.emit("x_resume", r.turn, decision="released", held_ms=round(self.clock.ms - r.held_since))
+                r.released_gen = r.held_gen
+                r.released_ms = self.clock.ms
+                # The reply now plays over this sound on purpose: the barge-in evidence gathered
+                # before (carried over when a reply starts over ongoing speech) does not count.
+                reset = getattr(self.c.bargein, "reset", None)
+                if reset is not None:
+                    reset()
+                self._release(r)
+            else:
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=min(left, 0.25))
+                except asyncio.TimeoutError:
+                    pass
+
     def _cancel_reply(self, keep_record: bool) -> None:
         r = self.reply
         if self.reply_task and not self.reply_task.done():
@@ -657,6 +937,7 @@ class Orchestrator:
             # the user talks over a filler played before the final text: still their turn
             self.log.emit("barge_in_detected", e["label"])
             self._stop_early(e)
+            self._spawn(self._reask_if_no_speech(self.gen))
             return
         if r is None:
             return
@@ -670,25 +951,71 @@ class Orchestrator:
             # Only a filler was heard: the user is still on their turn. One turn, as before any audio.
             self.carry = (self.carry + " " + r.user_text).strip() if self.carry else r.user_text
             self._cancel_reply(keep_record=True)
+            self._spawn(self._reask_if_no_speech(self.gen))
             return
         self.pending_interrupt = Interrupted(spoken)
+        if r.released_gen == self.gen and not r.announce and self.gen not in self.finals:
+            # it was let go over this very segment's sound: its final decides what comes next
+            # (if that final already came back, nothing would read this; the next turn sees the cut)
+            self.cut_released = r
         self._cancel_reply(keep_record=True)
 
+    async def _reask_if_no_speech(self, gen: int) -> None:
+        """A barge-in stopped a filler (early, or a reply with only its filler heard) and kept the
+        question as carry for the user's next turn end. BargeIn fires on 40 ms of sound, the
+        endpointer starts a segment only on 60 ms: a short "eh" or a click barges in with no
+        speech_start, so no turn end follows. If no segment started after short_bargein_ms
+        and the turn's final is in, answer the carried question."""
+        wait = float(self.ocfg["short_bargein_ms"])
+        if wait <= 0:
+            return
+        until = self.clock.ms + wait
+        while self.clock.ms < until or self.finals_pending:
+            if self.gen != gen:
+                return
+            await asyncio.sleep(0.05)
+        if (self.gen != gen or self.in_user_turn or not self.carry or self.early is not None
+                or self._reply_in_flight()):
+            return
+        full = self.carry
+        self.log.emit("x_resume", self.label, decision="short_bargein_reasked", text=full)
+        self._answer(self.label, gen, full)
+
     # -- announcements: speaking without a user turn ---------------------------
+    @staticmethod
+    def _heard(r: Reply) -> bool:
+        """Did the user hear (most of) a reply that carried an unheard announcement? Asked once
+        the conversation is free, so a barge-in during its playback is known."""
+        if not r.content_started:
+            return False
+        if not r.interrupted:
+            return True
+        return len((r.text_spoken or "").split()) >= 0.6 * max(1, len(r.text_generated.split()))
+
+
     def announce(self, prompt: str) -> asyncio.Task:
         """Speak a reply nobody asked for just now (a task handed to Claude Code finished).
 
         The brain gets `prompt` as a turn of its own once the conversation is free: the user
         is not talking, no reply is in flight, nothing plays, for announce_quiet_ms. The user
         can talk over it like over any reply. If the user starts talking before any of its
-        audio played, it is dropped and tried again when they are done."""
+        content played, it is dropped and tried again when they are done.
+
+        A dropped try stays in the brain's history (the claude process keeps the message), so a
+        retry sent as the same text reads like a second, repeated result ("came back again").
+        A retry therefore goes with ANNOUNCE_RETRY_NOTE: the user has not heard it, say it once.
+        Replies to the user in the meantime carry it (ANNOUNCE_CARRY_NOTE); once one of them was
+        heard, the announcement is delivered and not tried again."""
         return self._spawn(self._announce(prompt))
 
     def _free(self) -> bool:
-        return not self.in_user_turn and not self._reply_in_flight() and not self.sink.is_playing()
+        return (not self.in_user_turn and not self.finals_pending and not self._reply_in_flight()
+                and not self.sink.is_playing())
 
     async def _announce(self, prompt: str) -> None:
         quiet_s = float(self.ocfg["announce_quiet_ms"]) / 1000.0
+        attempt = 0
+        item: Optional[dict] = None
         while True:
             free_since = None
             while True:
@@ -700,17 +1027,28 @@ class Orchestrator:
                 elif now - free_since >= quiet_s:
                     break
                 await asyncio.sleep(0.05)
-            r = Reply(None, prompt, decided_ms=self.clock.ms, announce=True)
+            if item is not None:
+                self.unheard = [u for u in self.unheard if u is not item]
+                if any(self._heard(x) for x in item["by"]):
+                    self.log.emit("x_announce_delivered", None, text=prompt[:200], attempt=attempt)
+                    return                       # a reply to the user already told them
+            text = prompt if attempt == 0 else ANNOUNCE_RETRY_NOTE + " " + prompt
+            attempt += 1
+            r = Reply(None, text, decided_ms=self.clock.ms, announce=True)
             self.reply = r
             self.replies.append(r)
             interrupted, self.pending_interrupt = self.pending_interrupt, None
             r.after_interrupt = interrupted is not None
-            self.log.emit("x_announce", None, text=prompt[:200])
+            self.log.emit("x_announce", None, text=prompt[:200], attempt=attempt)
             task = self._spawn(self._reply(r, interrupted, None))
             self.reply_task = task
             await asyncio.wait({task})
-            if r.audio_started or not task.cancelled():
+            # retry only if none of its content was heard (a keepalive line is not the content)
+            if r.content_started or not task.cancelled():
                 return
+            # not heard: the next replies to the user carry it, else it is tried again when free
+            item = {"prompt": prompt, "by": []}
+            self.unheard.append(item)
 
     # -- output --------------------------------------------------------------
     def transcript(self, scripts: Optional[dict] = None) -> dict:

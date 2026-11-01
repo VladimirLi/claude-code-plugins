@@ -36,6 +36,9 @@ Config (`cfg["tts"]`), all optional:
     lead_frames cap on the leading pad token frames  default none (capping hurts the first word)
     threads     torch CPU threads                    default 8
     prewarm     synthesize OPENERS at start (cache)  default true
+    warm_text   throwaway piece warm() runs at a turn end   default "Okay."
+    prewarm_dir saved OPENERS audio, reused next start  default ~/.claude/live-conversation/tts-cache
+                (keyed by this file, kokoro's version and the config; "" turns it off)
     cache_size  short pieces kept in the audio cache default 256
     cache_max_words  longest piece that is cached    default 3
     level_dbfs  active speech RMS target             default -18
@@ -48,6 +51,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
+import json
 import os
 import re
 import sys
@@ -67,6 +72,13 @@ _SENT = re.compile(r"(.+?[.!?…]+[\"')\]]*)(\s+|$)", re.S)
 _CLAUSE = re.compile(r"(.+?(?:[,;:]|\s[-–—]))(\s+)", re.S)
 
 
+# Words that open a new phrase, where a speaker can pause inside a long sentence.
+# ("and" / "or" are left out: they mostly join two nouns, "the code and logs".)
+_PHRASE_START = {"to", "because", "so", "which", "that", "when", "while", "if", "but", "since", "once",
+                 "whether", "until", "where", "after", "before"}
+_WORD = re.compile(r"\S+")
+
+
 class Chunker:
     """Splits streamed reply text into pieces to synthesize.
 
@@ -75,13 +87,41 @@ class Chunker:
       "Two hundred and forty tests passed,") so the voice starts sooner. Only a
       short clause (<= first_clause_max_words) is split off, since that is where a
       speaker pauses anyway.
+    - A long first sentence (long_first_words or more, still open) is split at a phrase
+      boundary: a comma within the first long_split_max_words words, else just before
+      a phrase-opening word ("to", "because", "which" ...) after 5-10 words. The first
+      sound waits for the whole first piece to be synthesized, and Kokoro takes about
+      0.77 s for a 20-word sentence against 0.35 s for 9 words (measured 2026-10-30),
+      so on the 2026-10-30 session "I was looking through the plugin code and logs to
+      check whether ..." took 2.4 s from first text to first sound.
     """
 
-    def __init__(self, min_chars: int = 2, first_clause_max_words: int = 6) -> None:
+    def __init__(self, min_chars: int = 2, first_clause_max_words: int = 6,
+                 long_first_words: int = 12, long_split_min_words: int = 5, long_split_max_words: int = 10) -> None:
         self.buf = ""
         self.min_chars = min_chars
         self.first_clause_max_words = first_clause_max_words
+        self.long_first_words = long_first_words
+        self.long_split_min_words = long_split_min_words
+        self.long_split_max_words = long_split_max_words
         self.emitted = 0
+
+    def _long_first_split(self, m) -> int:
+        """End index in buf of the first piece of a long first sentence, or 0. m: the _SENT match
+        of the first sentence if its end is in buf (None while it is still open)."""
+        sent = m.group(1) if m else self.buf
+        words = list(_WORD.finditer(sent))
+        complete = m is not None or self.buf[-1:].isspace()     # else the last word may still grow
+        if len(words) < self.long_first_words or not complete and len(words) <= self.long_first_words:
+            return 0
+        c = _CLAUSE.match(sent)
+        if c and len(c.group(1).split()) <= self.long_split_max_words:
+            return c.end(1)
+        for i in range(self.long_split_min_words, self.long_split_max_words + 1):
+            w = words[i].group().lower().strip("\"'(")
+            if w in _PHRASE_START:
+                return words[i - 1].end()
+        return 0
 
     def _emit(self, piece: str, out: list) -> None:
         piece = piece.strip()
@@ -101,6 +141,12 @@ class Chunker:
                         1 <= len(c.group(1).split()) <= self.first_clause_max_words:
                     self.buf = self.buf[c.end():]
                     self._emit(c.group(1), out)
+                    continue
+            if self.emitted == 0 and not out and (sent_ok or not m):
+                k = self._long_first_split(m if sent_ok else None)
+                if k:
+                    piece, self.buf = self.buf[:k], self.buf[k:].lstrip()
+                    self._emit(piece, out)
                     continue
             if sent_ok:
                 self.buf = self.buf[m.end():]
@@ -234,12 +280,60 @@ class KokoroTTS:
                   "then we can see what is left and decide together."):
             for _ in self._gen(t):
                 pass
-        if self.cfg.get("prewarm", True):
+        if self.cfg.get("prewarm", True) and not self._load_openers():
             for t in OPENERS:
                 self._cached(t)
+            self._save_openers()
         if self.bucket and self.cfg.get("warm_buckets", True):
             for n in range(self.bucket * 2, int(self.cfg.get("warm_max_frames", 320)) + 1, self.bucket):
                 self._decode_frames(n)
+
+    # Synthesizing OPENERS took ~14 s of a ~28 s start (measured); the saved audio loads in well under 1 s.
+    def _openers_path(self) -> Optional[str]:
+        d = self.cfg.get("prewarm_dir", os.path.expanduser("~/.claude/live-conversation/tts-cache"))
+        if not d:
+            return None
+        try:
+            from importlib.metadata import version
+            kv = version("kokoro")
+        except Exception:
+            kv = "?"
+        with open(__file__, "rb") as f:
+            h = hashlib.sha256(f.read())
+        h.update(json.dumps([kv, self.voice, self.speed, self.pauses, self.shape_kw, self.fdev, self.ddev,
+                             self.bucket, self.cfg.get("lead_frames")], sort_keys=True).encode())
+        return os.path.join(d, f"openers-{h.hexdigest()[:16]}.npz")
+
+    def _load_openers(self) -> bool:
+        p = self._openers_path()
+        if not p or not os.path.exists(p):
+            return False
+        try:
+            with np.load(p, allow_pickle=False) as z:
+                counts = json.loads(str(z["index"]))
+                cache = OrderedDict((t.lower(), [z[f"{i}_{j}"] for j in range(n)])
+                                    for i, (t, n) in enumerate(counts))
+        except Exception:
+            return False                    # damaged file: synthesize again and overwrite it
+        self.cache.update(cache)
+        return True
+
+    def _save_openers(self) -> None:
+        p = self._openers_path()
+        if not p:
+            return
+        arrays, counts = {}, []
+        for i, t in enumerate(OPENERS):
+            segs = self.cache.get(t.lower(), [])
+            counts.append((t, len(segs)))
+            arrays.update({f"{i}_{j}": a for j, a in enumerate(segs)})
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = p + ".tmp.npz"
+            np.savez(tmp, index=json.dumps(counts), **arrays)
+            os.replace(tmp, p)
+        except OSError:
+            pass                            # no cache: the next start synthesizes again
 
     def _decode_frames(self, n: int) -> None:
         """Run the decoder once on n frames of silence-like input (compiles that shape on MPS)."""
@@ -330,6 +424,18 @@ class KokoroTTS:
 
     async def close(self) -> None:
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+    async def warm(self) -> None:
+        """Run the model once on a short throwaway piece, so the reply's first piece finds it hot.
+
+        After 10-20 s idle the first piece takes 1.5-2x as long (measured 2026-10-30: median
+        ~505 ms against ~325 ms when a short piece ran ~0.6 s before; one outlier 1442 ms).
+        The orchestrator calls this at the turn end, when the brain still needs ~0.75 s or
+        more for its first word. Does nothing when a piece is being made or before start()."""
+        if self.model is None or self.lock.locked():
+            return
+        async with self.lock:
+            await self._run(self._synth, self.cfg.get("warm_text", "Okay."))
 
     async def synthesize(self, text: str) -> AsyncIterator[np.ndarray]:
         text = clean_text(text)

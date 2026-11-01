@@ -19,7 +19,7 @@ What makes the reply speakable fast:
   request is small and nothing runs before it;
 - start() warms a small pool of processes, times each one's first text on probe
   turns and keeps the two fastest; each turn is raced on both and the first to
-  start its reply wins (the other is interrupted before any tool runs, and gets
+  start answering (a text or tool block; a thinking block does not count) wins (the other is interrupted before any tool runs, and gets
   the exchange it missed as a context note on its next turn);
 - effort "low", which mostly skips adaptive thinking before the first word;
 - a voice system prompt (VOICE_PROMPT) that asks for a short first sentence, spoken
@@ -35,6 +35,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
@@ -45,10 +46,11 @@ write is turned into speech the moment you write it. The user hears it, they nev
 
 How you talk:
 - Like a sharp, friendly colleague on a call, not an assistant writing a document. Contractions, everyday \
-words, short sentences, one idea per sentence. React like a person when it fits ("Oh nice.", "Yeah, \
-fair.", "Hmm."), but don't open every reply the same way.
+words, short sentences, one idea per sentence. React like a person only when something calls for it \
+("Oh nice.", "Yeah, fair."); most replies just start with the answer.
 - Your first sentence is short, under eight words, and already answers or reacts. "Canberra." is a \
-perfect start. Never open with filler like "Great question", "Sure thing", "Absolutely" or "Of course", \
+perfect start. Never open with filler like "Oh, so", "Yeah, so basically", "Okay so", "Got it", "Right, \
+sure", "Great question", "Sure thing", "Absolutely" or "Of course", \
 and don't announce what you're about to say ("Here's the short version", "Here's the core idea"). Just \
 say it.
 - Fit the length to the moment. A quick fact: one or two sentences. Small talk: one or two sentences, \
@@ -71,7 +73,8 @@ fits what they meant.
 Doing work with tools:
 - Never start a reply with a tool call: the user would hear dead silence. Always write one short \
 sentence first that you're on it ("Let me take a look.", "Okay, running them now."), then use the tools without narrating each step, then give the result in two or three short spoken \
-sentences: the answer and what matters, not everything you saw. Look only at the few things you need.
+sentences: the answer and what matters, not everything you saw. Look only at the few things you need: \
+one or two quick tool calls, never a long search. The user hears silence while tools run.
 
 The conversation:
 - The user's words come from speech recognition, so read them charitably.
@@ -86,9 +89,54 @@ WARM_TEXT = "(Audio check before the call starts. Reply with only the word: read
 PROBE_TEXT = "(Audio check {n}. Reply with only the word: ready)"
 
 
+# what the brain is told when a reply went over its tool budget (see DEFAULTS tool_budget)
+NUDGE_HANDOFF = ("[Note from the call: you are working with your own tools for too long and the user hears "
+                 "silence. Stop now. Hand the whole task to Claude Code with the live-task command, and say so "
+                 "in one short sentence first. Don't do any more of the work yourself.]")
+NUDGE_ANSWER = ("[Note from the call: you are working with your own tools for too long and the user hears "
+                "silence. Stop using tools. Tell the user in two short sentences what you found so far.]")
+HANDOFF_MARK = "Handing work to Claude Code"     # heading of tasks.handoff_prompt()
+_OVER = object()                                 # queue item: the reply went over its tool budget
+
+
+def is_handoff(name: str, tool_input: str) -> bool:
+    """Is this tool call the live-task handoff? Only a Bash command that runs live-task (directly,
+    through python, or after `cd x &&`) is. Reading bin/live-task or grepping for "live-task"
+    is the brain's own digging and counts against its tool budget."""
+    if name != "Bash":
+        return False
+    try:
+        cmd = json.loads(tool_input or "{}").get("command") or ""
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        tokens = cmd.split()
+    parts, cur = [], []
+    for t in tokens:
+        if t and set(t) <= set(";&|()\n"):
+            parts.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    parts.append(cur)
+    for words in parts:
+        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in ("env", "exec", "uv", "run")):
+            words = words[1:]
+        if words and os.path.basename(words[0]).startswith("python") and len(words) > 1:
+            words = words[1:]
+        if words and os.path.basename(words[0]) == "live-task":
+            return True
+    return False
+
+
 @dataclass
 class Interrupted:
     spoken_text: str
+    question: str = ""          # what the user had asked, when the reply to it was cut
 
 
 DEFAULTS = {
@@ -101,6 +149,11 @@ DEFAULTS = {
     "fast_ms": 900,
     "race": 2,                   # warm processes kept; each turn goes to all, the first to start wins
     "narrate_after_s": 6.0,      # after a tool call, speak a narration line only after this much silence
+    # A reply that keeps working with its own tools leaves the user in silence. Past this many tool
+    # calls (or this many seconds after the first one) the reply is interrupted and the brain is told
+    # to hand the work to Claude Code (live-task), or, without a handoff, to say what it has. 0 = off.
+    "tool_budget": 2,
+    "tool_budget_s": 8.0,
     "effort": "low",             # low effort mostly skips adaptive thinking (0.3-1 s before the first word)
     "disable_hooks": True,       # hooks of installed mods must not delay or alter voice turns
     "clean": True,               # strip markdown that slips through (see spoken())
@@ -171,6 +224,7 @@ class _Cleaner:
 
 
 _SENTENCE = re.compile(r"[.!?](\s|$)")
+ANSWER_BLOCKS = ("text", "tool_use", "server_tool_use")
 
 
 class _Turn:
@@ -185,9 +239,21 @@ class _Turn:
       and is dropped, unless nothing was said for narrate_after_s, so a long task
       still gets one progress line."""
 
-    def __init__(self, q: asyncio.Queue, narrate_after_s: float = 6.0) -> None:
+    def __init__(self, q: asyncio.Queue, narrate_after_s: float = 6.0, tool_budget: int = 0,
+                 tool_budget_s: float = 0.0) -> None:
         self.q = q
         self.narrate_after_s = narrate_after_s
+        self.tool_budget = tool_budget
+        self.tool_budget_s = tool_budget_s
+        self.tools = 0                            # own tool calls so far (not the live-task handoff)
+        self.first_tool: Optional[float] = None
+        self.handed_off = False
+        self.over = False
+        self.tool_input: Optional[list[str]] = None   # input JSON of the tool block being streamed
+        self.tool_name = ""                       # name of that tool ("Bash", "Read" ...)
+        self.in_tool = False                      # a tool call ended and nothing came after it yet: it runs
+        self.timer: Optional[asyncio.TimerHandle] = None   # tool_budget_s deadline while a tool runs
+        self.done = False
         self.got_text = False
         self.after_tool = False
         self.in_text = False
@@ -199,6 +265,11 @@ class _Turn:
         self.t0 = time.monotonic()
         self.started = asyncio.Event()           # the model began its reply (any content block)
         self.started_at: Optional[float] = None
+        self.first_kind: Optional[str] = None    # type of the first content block ("thinking", "text" ...)
+        # the model began to answer: a text or tool block. A thinking block comes before it and
+        # holds the first word back by 0.45-1.07 s (2026-10-30 replay), so the race waits for this.
+        self.answering = asyncio.Event()
+        self.answering_at: Optional[float] = None
 
     def _out(self, t: str) -> None:
         if t and self.ends_space and t[:1].isspace():
@@ -226,10 +297,15 @@ class _Turn:
     def on_event(self, ev: dict) -> None:
         et = ev.get("type")
         if et == "content_block_start":
+            kind = ev.get("content_block", {}).get("type")
+            self.in_tool = False
             if not self.started.is_set():
                 self.started_at = time.monotonic()
+                self.first_kind = kind
                 self.started.set()
-            kind = ev.get("content_block", {}).get("type")
+            if kind in ANSWER_BLOCKS and not self.answering.is_set():
+                self.answering_at = time.monotonic()
+                self.answering.set()
             if kind == "text":
                 if self.held_closed:
                     self._release()
@@ -240,6 +316,15 @@ class _Turn:
                 if self.held_closed:
                     self._drop_or_release()
                 self.after_tool = True
+                self.tool_input = []
+                self.tool_name = ev.get("content_block", {}).get("name") or ""
+        elif et == "content_block_delta" and ev.get("delta", {}).get("type") == "input_json_delta":
+            if self.tool_input is not None:
+                self.tool_input.append(ev["delta"].get("partial_json") or "")
+        elif et == "content_block_stop" and self.tool_input is not None:
+            self._tool_done("".join(self.tool_input), self.tool_name)
+            self.tool_input = None
+            self.in_tool = True
         elif et == "content_block_delta" and ev.get("delta", {}).get("type") == "text_delta":
             t = ev["delta"]["text"]
             if self.held is not None:
@@ -269,13 +354,79 @@ class _Turn:
             if self.held_closed and (et == "message_stop" or ev.get("delta", {}).get("stop_reason") != "tool_use"):
                 self._release()
 
+    def _tool_done(self, tool_input: str, name: str = "") -> None:
+        """A tool call is complete (it runs next). Past the budget, ask the reader to stop the reply."""
+        if is_handoff(name, tool_input):
+            self.handed_off = True
+            self._stop_timer()
+        if self.handed_off or self.over or self.tool_budget <= 0:
+            return
+        now = time.monotonic()
+        self.tools += 1
+        if self.first_tool is None:
+            self.first_tool = now
+        if self.tools > self.tool_budget or (self.tool_budget_s > 0 and now - self.first_tool >= self.tool_budget_s):
+            self._go_over()
+        elif self.tool_budget_s > 0 and self.timer is None:
+            # One tool call can run for a minute and send nothing meanwhile: the time budget
+            # must not wait for the next tool block to be checked.
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self.timer = loop.call_at(loop.time() + self.first_tool + self.tool_budget_s - now, self._time_up)
+
+    def _time_up(self) -> None:
+        self.timer = None
+        if self.done or self.handed_off or self.over:
+            return
+        if self.in_tool:
+            self._go_over()
+        # else the brain is writing again; the next tool call checks the time
+
+    def _go_over(self) -> None:
+        self._stop_timer()
+        self.over = True
+        self.q.put_nowait(_OVER)
+
+    def _stop_timer(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+
     def finish(self) -> None:
+        self.done = True
+        self._stop_timer()
         if self.held:
             self._release()
         if not self.started.is_set():
             self.started_at = time.monotonic()
             self.started.set()
+        if not self.answering.is_set():
+            self.answering_at = time.monotonic()
+            self.answering.set()
         self.q.put_nowait(None)
+
+
+# The voice brain runs Bash without asking, so it must not see this process's secrets (the Azure
+# keys above all). It gets the environment minus anything that looks like a secret, except the
+# variables `claude` itself signs in with.
+_SECRET = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.I)
+_CLAUDE_AUTH = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+
+
+def brain_env(env: Optional[dict] = None) -> dict:
+    """The environment for `claude -p`: no AZURE_*, nothing named like a key, token, secret,
+    password or credential, but claude's own sign-in (and, for Bedrock or Vertex users, the
+    cloud credentials claude needs)."""
+    env = dict(os.environ if env is None else env)
+    keep = set(_CLAUDE_AUTH)
+    if env.get("CLAUDE_CODE_USE_BEDROCK"):
+        keep |= {k for k in env if k.startswith("AWS_")}
+    if env.get("CLAUDE_CODE_USE_VERTEX"):
+        keep |= {"GOOGLE_APPLICATION_CREDENTIALS"}
+    return {k: v for k, v in env.items()
+            if k in keep or (not k.upper().startswith("AZURE_") and not _SECRET.search(k))}
 
 
 class _Session:
@@ -292,11 +443,15 @@ class _Session:
         self._req = 0
         self._interrupting = False
         self.narrate_after_s = 6.0
+        self.tool_budget = 0
+        self.tool_budget_s = 0.0
+        self.nudge = NUDGE_ANSWER
+        self.nudges = 0                       # replies stopped for going over the tool budget
         self.ttft_ms: list[float] = []        # first text delta after the turn was written
 
     async def start(self, warm: bool) -> None:
         self.proc = await asyncio.create_subprocess_exec(
-            *self.argv, cwd=self.cwd,
+            *self.argv, cwd=self.cwd, env=brain_env(),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, limit=1 << 24)
         self._reader = asyncio.create_task(self._read())
@@ -347,7 +502,7 @@ class _Session:
         return self.proc is not None and self.proc.returncode is None and self._reader is not None \
             and not self._reader.done()
 
-    async def submit(self, text: str) -> _Turn:
+    async def submit(self, text: str, budget: bool = True) -> _Turn:
         """Send one user turn; returns its _Turn (read it with stream())."""
         assert self.proc and self.proc.stdin
         await self._busy.wait()
@@ -356,7 +511,7 @@ class _Session:
         self._busy.clear()
         q: asyncio.Queue = asyncio.Queue()
         self._queue = q
-        turn = _Turn(q, self.narrate_after_s)
+        turn = _Turn(q, self.narrate_after_s, self.tool_budget if budget else 0, self.tool_budget_s)
         self._turn = turn
         msg = {"type": "user", "message": {"role": "user", "content": text}}
         self.proc.stdin.write((json.dumps(msg) + "\n").encode())
@@ -370,6 +525,13 @@ class _Session:
         try:
             while True:
                 t = await turn.q.get()
+                if t is _OVER:
+                    # too long on its own tools: stop this reply and tell the same process to hand
+                    # off (or wrap up); its answer streams on as part of this reply
+                    self.nudges += 1
+                    await self.cancel()
+                    turn = await self.submit(self.nudge, budget=False)
+                    continue
                 if t is None:
                     finished = True
                     if clean is not None:
@@ -451,6 +613,7 @@ class Brain:
         self.wins: list[int] = []                      # index of the winning session per turn
         self._closing: list[asyncio.Task] = []
         self._missed: dict[int, list[tuple[str, str]]] = {}   # id(session) -> (user said, user heard)
+        self.last_timing: dict = {}                    # see respond()
 
     def system_prompt(self) -> str:
         p = (self.cfg.get("system_prompt") or VOICE_PROMPT) + (self.cfg.get("prompt_extra") or "")
@@ -475,6 +638,9 @@ class Brain:
     def _new_session(self) -> _Session:
         s = _Session(self._argv(), self.cfg.get("cwd") or os.getcwd(), self.cfg.get("clean", True))
         s.narrate_after_s = float(self.cfg.get("narrate_after_s", 6.0))
+        s.tool_budget = int(self.cfg.get("tool_budget") or 0)
+        s.tool_budget_s = float(self.cfg.get("tool_budget_s") or 0.0)
+        s.nudge = NUDGE_HANDOFF if HANDOFF_MARK in self.system_prompt() else NUDGE_ANSWER
         return s
 
     async def start(self) -> None:
@@ -522,7 +688,13 @@ class Brain:
             parts = [f'the user said "{u}" and you answered "{a}"' if a else f'the user said "{u}" and you said nothing yet'
                      for u, a in missed[-4:]]
             notes.append("[Context: replies from you that are not in your history yet: " + "; then ".join(parts) + ".]")
-        if interrupted is not None:
+        if interrupted is not None and interrupted.question.strip():
+            heard = interrupted.spoken_text.strip()
+            notes.append(f'[You were answering: "{interrupted.question.strip()}". The user heard only: '
+                         f'"{heard}", then interrupted.]' if heard else
+                         f'[You were answering: "{interrupted.question.strip()}". The user interrupted '
+                         f'before you said anything.]')
+        elif interrupted is not None:
             heard = interrupted.spoken_text.strip()
             notes.append(f'[The user interrupted you. They heard only: "{heard}"]' if heard
                          else "[The user interrupted you before you said anything]")
@@ -530,6 +702,7 @@ class Brain:
 
     async def respond(self, text: str, interrupted: Optional[Interrupted] = None) -> AsyncIterator[str]:
         assert self.session is not None, "start() first"
+        t0 = time.monotonic()
         live = [s for s in self.sessions if s.alive] or [self.session]
         idle = [s for s in live if s._busy.is_set()]
         if not idle:
@@ -540,16 +713,18 @@ class Brain:
                 x.cancel()
             idle = [waits[x] for x in done]
         live = idle      # a process still busy sits this turn out; it gets a context note later
+        t_idle = time.monotonic()
         turns = list(await asyncio.gather(*(s.submit(self._message(s, text, interrupted)) for s in live)))
         w = 0
         if len(live) > 1:
-            waits = [asyncio.ensure_future(t.started.wait()) for t in turns]
+            # the first to start answering wins, not the first to start thinking
+            waits = [asyncio.ensure_future(t.answering.wait()) for t in turns]
             try:
                 await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 for x in waits:
                     x.cancel()
-            started = [(t.started_at, i) for i, t in enumerate(turns) if t.started_at is not None]
+            started = [(t.answering_at, i) for i, t in enumerate(turns) if t.answering_at is not None]
             w = min(started)[1]
             for i, s in enumerate(live):
                 if i != w:
@@ -557,10 +732,19 @@ class Brain:
         winner = live[w]
         self.session = winner
         self.wins.append(self.sessions.index(winner) if winner in self.sessions else 0)
+        ms = lambda t: round((t - t0) * 1000) if t is not None else None   # noqa: E731
+        # timing of this turn, for the x_brain event: wait for an idle process, each racer's
+        # reply start, the first text (set when the first delta is yielded)
+        self.last_timing = {"idle_ms": ms(t_idle), "racers": len(live), "winner": self.wins[-1],
+                            "started_ms": [ms(t.started_at) for t in turns],
+                            "answering_ms": [ms(t.answering_at) for t in turns],
+                            "first_kind": [t.first_kind for t in turns], "first_text_ms": None}
         out: list[str] = []
         done = False
         try:
             async for d in winner.stream(turns[w]):
+                if not out:
+                    self.last_timing["first_text_ms"] = ms(time.monotonic())
                 out.append(d)
                 yield d
             done = True

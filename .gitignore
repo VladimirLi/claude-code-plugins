@@ -4,4 +4,8 @@
 *.swp
 .mcpb-cache/
 .claude-plugin/types/
+
+# local secrets
 .env
+.env.*
+!.env.example

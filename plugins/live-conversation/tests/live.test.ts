@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 const RUN = '/tmp/claude-live-conversation/s1'
 
-function engine(on: On, opts: { hasVenv?: boolean; setupFails?: boolean } = {}) {
+function engine(on: On, opts: { hasVenv?: boolean; setupFails?: boolean; foreignRunDir?: boolean } = {}) {
   const w = {
     status: [] as (string | undefined)[],
     toasts: [] as string[],
@@ -41,6 +41,7 @@ function engine(on: On, opts: { hasVenv?: boolean; setupFails?: boolean } = {}) 
   on('process.run', (_, e) => {
     w.runs.push([...e.argv])
     if (e.argv.includes('--check')) return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+    if (e.argv[2]?.includes('mkdir -p -m 700')) return { value: { exitCode: opts.foreignRunDir ? 2 : 0, stdout: '', stderr: '' } } as never
     if (e.argv[0] === 'kill') w.say('EXIT')
     return { value: { exitCode: 0, stdout: '/usr/bin/rec\n', stderr: '' } } as never
   })
@@ -150,4 +151,28 @@ test('/live feedback marks the moment in the recording, /live review asks the se
   expect((await $.command.run({ command: 'live', args: 'review' } as never)).text).toContain('/rec/s1')
   await clock.advance(0)
   expect(w.prompts.at(-1)).toContain('bin/live-review" "/rec/s1"')
+  expect(w.prompts.at(-1)).toMatch(/Run: "[^"]*\/\.venv\/bin\/python" "/)   // a dev checkout: its .venv
+})
+
+test('/live review on an installed copy runs live-review with the python setup resolved', async ($, on) => {
+  const { w, clock } = engine(on, { hasVenv: false })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  await $.command.run({ command: 'live', args: '' } as never)
+  await clock.advance(0)
+  w.say('{"t_ms": 0, "event": "x_recording", "turn": null, "path": "/rec/s1"}')
+  await clock.advance(0)
+  await $.command.run({ command: 'live', args: 'review' } as never)
+  await clock.advance(0)
+  expect(w.prompts.at(-1)).toContain('Run: "/home/v/venv/bin/python" "')
+  expect(w.prompts.at(-1)).toContain('bin/live-review" "/rec/s1"')
+})
+
+test('/live makes its run folder private and refuses one another user owns', async ($, on) => {
+  const { w } = engine(on, { foreignRunDir: true })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  const { text } = await $.command.run({ command: 'live', args: '' } as never)
+  expect(text).toContain('did not start')
+  const check = w.runs.find(r => r[2]?.includes('mkdir -p -m 700'))
+  expect(check?.slice(3)).toEqual(['sh', '/tmp/claude-live-conversation', RUN])
+  expect(w.spawned).toHaveLength(0)
 })

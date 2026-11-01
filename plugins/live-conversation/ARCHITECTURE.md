@@ -82,6 +82,7 @@ await stt.start()                           # warm connections/models
 stt.feed(frame)                             # every frame, always
 stt.begin()                                 # utterance starts (keeps preroll_ms before)
 stt.on_interim = fn(text)                   # optional, streaming STT
+stt.on_event = fn(name, fields)             # optional: x_stt_final / _reconnect / _error / _dropped events
 text = await stt.finalize()                 # final text since begin()
 await stt.close()
 ```
@@ -128,6 +129,10 @@ tt.decide(TurnContext(transcript, assistant_was_speaking, last_reply)) -> Action
 tt.on_user_resumed(ctx) -> "merge" | "new"
 ```
 
+Known problem (user feedback, 2026-10-30): replies keep opening with filler such as "Oh, so,",
+"Got it," or "Yeah, so basically,". It sounds unnatural, not like a person on a call. Fixed: the
+canned fillers are off by default (cfg `fillers`), and the brain prompt says to start with the answer.
+
 ### orchestrator
 
 ```python
@@ -136,8 +141,21 @@ await orch.start(); await orch.run(); orch.transcript(scripts); await orch.close
 ```
 Writes `turn_end_detected`, `final_transcript`, `first_reply_text`,
 `barge_in_detected`. Events of a reply carry the user turn it answers. If the
-user starts speaking again before any reply audio, the reply is cancelled and
-the two parts are merged into one turn.
+user makes a sound again before any reply audio, the reply is held (it keeps
+going, nothing plays). If that segment's transcript has words, the reply is
+cancelled and the two parts are merged into one turn; if not (noise, a breath),
+the held reply plays and is not restarted (`x_resume` hold / kept / merged).
+A hold lasts at most `hold_max_ms` (1.5 s) unless an interim transcript of the
+sound had words: then the reply plays (`x_resume` released). If the final still
+has words, the playing reply is stopped and the parts are merged. The cap and
+the words check start again for each new sound that re-holds the reply. A late
+wordless final of an older sound never restarts a reply made from a newer one.
+A barge-in that stops a filler keeps the question as carry; if no speech_start
+follows within `short_bargein_ms` (a 40-59 ms sound is too short for the
+endpointer), the question is answered (`x_resume` short_bargein_reasked). Each
+new reply logs its own `first_reply_audio`, also under a label an earlier reply
+used; a turn that gets a new label at its final logs `turn_end_detected` again
+(`source: relabel`).
 
 e2e wiring (see the module docstring): `build()` applies `E2E_OVERLAY` under each
 module section (a key in the config still wins), today the on-device endpointer
@@ -167,6 +185,13 @@ tasks.TaskBridge(run_dir, log).run(on_result)
 tasks.handoff_prompt(cmd)                   # brain cfg "prompt_extra" (only with --run-dir)
 orch.announce(prompt)                       # a brain turn played once the conversation is free
 ```
+
+The voice brain hands off every investigation (logs, bugs, checking behaviour), not only edits; it
+may do one quick lookup itself (two tool calls at most). Bar 20261030-110521 turn 5 instead said "Let me
+check the logs" and dug with its own tools in silence. The brain cfg `tool_budget` (2 calls) and
+`tool_budget_s` (8 s) enforce it: past the budget the reply is interrupted and the same process gets a
+note to hand the task off now (without a handoff prompt: to say what it found), which streams on as
+part of the same reply.
 
 `python -m live --run-dir DIR` turns this on (the mod passes
 `$TMPDIR/claude-live-conversation/<session id>`), writes `DIR/daemon.pid`, and

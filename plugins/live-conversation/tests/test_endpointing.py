@@ -53,6 +53,55 @@ def run(ep: Endpointer, plan: list[tuple[str, float]], frame_sleep: float = 0.0)
     return out
 
 
+class TestModelFile(unittest.TestCase):
+    """The cached Smart Turn file is checked against the pinned sha256 before it is loaded."""
+
+    def setUp(self):
+        import hashlib
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (em.CACHE_DIR, em.MODEL_SHA256, em.urllib.request.urlopen, set(em._checked),
+                      os.environ.pop("LIVE_SMART_TURN_MODEL", None))
+        em.CACHE_DIR = self.tmp.name
+        em.MODEL_SHA256 = hashlib.sha256(b"good weights").hexdigest()
+        em._checked.clear()
+        self.path = os.path.join(self.tmp.name, em.MODEL_FILE)
+        with open(self.path, "wb") as f:
+            f.write(b"tampered")
+
+    def tearDown(self):
+        em.CACHE_DIR, em.MODEL_SHA256, em.urllib.request.urlopen, checked, env = self.saved
+        em._checked.clear()
+        em._checked.update(checked)
+        if env is not None:
+            os.environ["LIVE_SMART_TURN_MODEL"] = env
+        self.tmp.cleanup()
+
+    def test_corrupted_cache_is_refused_without_download(self):
+        self.assertIsNone(em.model_path(download=False))
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_corrupted_cache_is_downloaded_again(self):
+        import io
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        em.urllib.request.urlopen = lambda url, timeout=60: Resp(b"good weights")
+        self.assertEqual(em.model_path(), self.path)
+        self.assertEqual(open(self.path, "rb").read(), b"good weights")
+
+    def test_override_is_used_unverified(self):
+        os.environ["LIVE_SMART_TURN_MODEL"] = self.path
+        try:
+            self.assertEqual(em.model_path(download=False), self.path)       # tampered, but the user's
+        finally:
+            os.environ.pop("LIVE_SMART_TURN_MODEL")
+
+
 class TestClassify(unittest.TestCase):
     def test_classes(self):
         cases = {
@@ -85,6 +134,20 @@ class TestEndpointer(unittest.TestCase):
         ep = Endpointer({"silence_ms": 100})
         out = run(ep, [("speech", 200), ("quiet", 200)])
         self.assertEqual([k for k, *_ in out], ["speech_start", "turn_end"])
+
+    def test_turn_end_says_where_the_speech_stopped(self):
+        ep = make("What time is it?")
+        ends = []
+        t = 0.0
+        for kind, ms in [("quiet", 400), ("speech", 1000), ("quiet", 1500)]:
+            for _ in range(int(ms / 20)):
+                t += 20
+                ends += [d for d in ep.feed(LOUD if kind == "speech" else QUIET, t) if d.kind == "turn_end"]
+                time.sleep(0.002)
+        self.assertEqual(len(ends), 1)
+        self.assertIsNotNone(ends[0].pause_start_ms)
+        self.assertLess(abs(ends[0].pause_start_ms - 1420), 41)     # the first quiet frame
+        self.assertLess(ends[0].pause_start_ms, ends[0].t_ms)
 
     def test_question_ends_fast(self):
         ep = make("What time is it?")

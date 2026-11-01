@@ -64,6 +64,7 @@ class Decision:
     kind: str           # "speech_start" | "turn_end"
     t_ms: float
     source: str = "vad"
+    pause_start_ms: Optional[float] = None     # turn_end: where the speech stopped
 
 
 DEFAULTS = {
@@ -391,11 +392,12 @@ class Endpointer:
         self._run_probes(p, quiet, t_ms)
         wait, why = self._wait(p)
         if quiet >= wait:
+            start = p.start_ms
             self._end_pause("turn_end", t_ms, why)
             self.in_turn = False
             self.speech_run = 0.0
             self.buf = []
-            out.append(Decision("turn_end", t_ms, why))
+            out.append(Decision("turn_end", t_ms, why, pause_start_ms=start))
         return out
 
     # -- probes --------------------------------------------------------------------
