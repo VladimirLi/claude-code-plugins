@@ -131,11 +131,11 @@ export function dialogRisky(message) {
 
 // Optional allow-list from JEVB_ALLOWED_DOMAINS (comma separated; a guard rail, not a boundary).
 const ALLOWED = (process.env.JEVB_ALLOWED_DOMAINS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-export function domainAllowed(url) {
-  if (!ALLOWED.length) return true;
+export function domainAllowed(url, allowed = ALLOWED) {
+  if (!allowed.length) return true;
   let host;
   try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) return true; host = u.hostname.toLowerCase(); } catch { return true; }
-  return ALLOWED.some((d) => host === d || host.endsWith(`.${d}`));
+  return allowed.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
 // QA sites from JEVB_QA_SITES (comma separated hosts; each also covers its subdomains, "*." optional):

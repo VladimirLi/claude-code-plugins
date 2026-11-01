@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 // The five operations (open, do, act, observe, check) plus eval, over one Tab.
 // Each returns { text, image?, data } where `text` is what Claude reads.
 import { jev, stats } from "./jev.mjs";
-import { KEY_NAMES } from "./tab.mjs";
+import { KEY_NAMES, SAFE_DIALOGS } from "./tab.mjs";
 import { brief, elementLine, renderPage, renderDiff, pageDiff, diffForJev } from "./format.mjs";
 import { fence, scrub, secretsOf, redactValues, gateRule, dialogRisky, domainAllowed, qaSite, REDACTED, SECRET_KEY } from "./safety.mjs";
 import { haiku, haikuOn, shouldEngage, planFirst, outerLoop, HAIKU_MS, READER, READ_CHARS, PAGE_CHARS, RISKY_LINK } from "./haiku.mjs";
@@ -73,6 +73,10 @@ const stem = (w) => w.slice(0, Math.min(w.length, Math.max(5, w.length - 2)));
 // title, url or top text carries the link's own name. The page alone rarely proves "the second
 // book listed there" (books: confirm 0.03 on the right book page), but the click Jev chose for
 // the goal landed where its link said. Returns the link name, or null.
+// the dialog policy of a do or act call: risky dialogs are held unless allow_irreversible, or the
+// dialog comes from a QA site page (its own URL, at the time it opens: a click that left the QA
+// site gets the pauses back for the new page's dialogs)
+export const dialogPolicy = (allow_irreversible, values) => (d) => (allow_irreversible || qaSite(d.url ?? "") || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
 // goals that go on to send or submit what they type
 const SEND_GOAL = /\b(send|submit|post|publish|save|create)\b/i;
 export function arrivedAt(page, history, goal = "") {
@@ -270,13 +274,14 @@ export class Agent {
         const p = await this.irreversible(before, `${op === "dblclick" ? "click" : op} ${brief(el ?? focused)}`).catch(() => 0);
         if (p >= 0.6) { status = "needs_confirmation"; pending = { op, id: a.id, element: brief(el ?? focused), ...(op === "press_key" ? { key } : {}) }; info = `Jev rates this form submit as hard to undo (${p.toFixed(2)}); repeat with allow_irreversible to do it`; break; }
       }
-      this.tab.dialogPolicy = (d) => (allow || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
+      this.tab.dialogPolicy = dialogPolicy(allow_irreversible, values);
       this.tab.held = null;
       const since = Date.now();
       try {
         const note = await this.tab.exec({ op, id: a.id != null ? Number(a.id) : undefined, value, key: a.key, to: a.to != null ? Number(a.to) : undefined, direction: a.direction });
         await this.tab.settle({ since });
-        if (!allow) await this.tab.takeHeld();
+        // a submit the guard stopped is reported unless allowed for the page the action ended on
+        if (!allow_irreversible && !(allow && qaSite(await this.tab.url()))) await this.tab.takeHeld();
         results.push({ op, id: a.id, ok: true, ...(note ? { note } : {}) });
       } catch (e) {
         results.push({ op, id: a.id, error: e.message.slice(0, 200) }); status = "error"; break;
@@ -291,7 +296,7 @@ export class Agent {
       if (!domainAllowed(u)) { await this.tab.exec({ op: "back" }).catch(() => {}); status = "blocked"; info = `navigation to ${u} is outside JEVB_ALLOWED_DOMAINS`; break; }
       if (u !== url0 && n < actions.length - 1) { info = `the page navigated after action ${n + 1}; the remaining ${actions.length - n - 1} were not run`; break; }
     }
-    } finally { if (opened) await this.tab.allowSubmits(false); }
+    } finally { this.tab.dialogPolicy = SAFE_DIALOGS; if (opened) await this.tab.allowSubmits(false); }
     const page = await this.tab.snapshot();
     const ev = this.events();
     const navigated = page.url.split("#")[0] !== before.url.split("#")[0];
@@ -536,8 +541,8 @@ export class Agent {
     const seen = new Map();
     // dialogs opened by this do's actions: part of what the page showed, for the confirm question
     const dialogs = () => history.filter((h) => h.dialog).map((h) => h.dialog);
-    tab.dialogPolicy = (d) => (allow_irreversible || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
-    let opened = false;
+    tab.dialogPolicy = dialogPolicy(allow_irreversible, values);
+    let opened = false, sendHint = false;
     try {
     for (let round = 0; round <= limit; round++) {
       page = await tab.snapshot();
@@ -545,7 +550,6 @@ export class Agent {
       const allow = allow_irreversible || qaSite(page.url);
       if (allow && !allow_irreversible && !opened) { await tab.allowSubmits(true); opened = true; }
       else if (!allow && opened) { await tab.allowSubmits(false); opened = false; }
-      tab.dialogPolicy = (d) => (allow || !dialogRisky(d.message) ? { accept: true, text: values.prompt } : { accept: false, held: true });
       for (const e of this.events()) history.push({ event: e });
       if (page.captcha) { status = "needs_human"; info = "the page shows a captcha or bot check; a person has to solve it"; break; }
       // a scroll goal whose named place was out of view at the start and is in view now: done
@@ -714,7 +718,7 @@ export class Agent {
         // since (a chat builder: "type the description and send it" typed, then wanted to type again)
         if (SEND_GOAL.test(goal) && !history.slice(history.findLastIndex((h) => h.value)).some((h) => ["click", "press_enter", "press_key"].includes(h.action) && !h.error)) {
           status = "stuck"; info = `every given value has been entered, but the goal also asks to send or submit it and nothing was sent; click the send or submit control`;
-          break;
+          sendHint = true; break;
         }
         const c = await confirm();
         status = c >= 0.65 ? "done" : "likely_done";
@@ -821,7 +825,7 @@ export class Agent {
         if (note) h.note = note;
         if (op === "type" && act.valueKey) this.typed.set(act.target, act.valueKey);
         await tab.settle({ since });
-        if (!allow) await tab.takeHeld();
+        if (!allow_irreversible && !(allow && qaSite(await tab.url()))) await tab.takeHeld();
       } catch (e) { h.error = e.message.slice(0, 160); }
       const dl = tab.dialogsSince(since);
       if (dl.length) h.dialog = dl.join("; ");
@@ -831,10 +835,11 @@ export class Agent {
       const u = await tab.url();
       if (!domainAllowed(u)) { await tab.exec({ op: "back" }).catch(() => {}); status = "blocked"; info = `navigation to ${u} is outside JEVB_ALLOWED_DOMAINS`; break; }
     }
-    } finally { if (opened) await tab.allowSubmits(false); }
+    } finally { tab.dialogPolicy = SAFE_DIALOGS; if (opened) await tab.allowSubmits(false); }
     // stuck, max_actions or ambiguous after acting: the goal may be met anyway (repeat
     // detectors fire on finished toggles and scrolls); ask before handing back as a failure
-    if (["stuck", "max_actions", "ambiguous"].includes(status) && history.some((h) => h.action) && page) {
+    // (not the typed-but-not-sent stuck: actionDone says yes to the typing alone)
+    if (["stuck", "max_actions", "ambiguous"].includes(status) && !sendHint && history.some((h) => h.action) && page) {
       // judge the page as it is now: after a wait (or a decision that took a while) the
       // round's snapshot can be older than what finally rendered
       const fresh = await tab.snapshot().catch(() => null);

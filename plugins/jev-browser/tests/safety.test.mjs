@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { irreversibleRule, gateRule, SUBMIT_GUARD, dialogRisky, redactValues, scrub, fence, secretsOf, formCollects, qaSite } from "../src/safety.mjs";
+import { irreversibleRule, gateRule, SUBMIT_GUARD, dialogRisky, redactValues, scrub, fence, secretsOf, formCollects, qaSite, domainAllowed } from "../src/safety.mjs";
+import { dialogPolicy } from "../src/agent.mjs";
+import { SAFE_DIALOGS } from "../src/tab.mjs";
 import { pageDiff, renderPage } from "../src/format.mjs";
 
 const page = (url, text, elements = []) => ({ url, title: "", text, elements, dialogs: [] });
@@ -122,4 +124,19 @@ test("QA sites: listed hosts and their subdomains only, http(s) only", () => {
   assert.equal(qaSite("https://notstaging.example.com/", sites), false);
   assert.equal(qaSite("data:text/html,x", sites), false);
   assert.equal(qaSite("https://app.staging.example.com/", []), false);
+});
+
+test("JEVB_ALLOWED_DOMAINS: listed domains and subdomains; off when empty", () => {
+  assert.ok(domainAllowed("https://shop.example.com/x", ["example.com"]));
+  assert.equal(domainAllowed("https://example.com.evil.test/", ["example.com"]), false);
+  assert.ok(domainAllowed("https://anything.test/", []));
+});
+
+test("dialogs: risky ones held in a call unless allowed or from a QA page, dismissed outside a call", () => {
+  const risky = { type: "confirm", message: "Are you sure you want to delete your account?", url: "https://shop.example.com/" };
+  assert.deepEqual(dialogPolicy(false, {})(risky), { accept: false, held: true });
+  assert.equal(dialogPolicy(true, {})(risky).accept, true);
+  assert.equal(dialogPolicy(false, {})({ ...risky, message: "Saved" }).accept, true);
+  assert.equal(SAFE_DIALOGS(risky).accept, false);
+  assert.equal(SAFE_DIALOGS({ ...risky, message: "Hello" }).accept, true);
 });

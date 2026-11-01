@@ -327,8 +327,9 @@ export function childEnv(env = process.env) {
   // Nothing of the session that started the daemon: its id, messaging socket, effort and plugin
   // dirs (CLAUDE_CODE_PLUGIN_DIRS loads its plugins even under --safe-mode). No API key or token
   // either (it would bill an API account instead of the subscription), and the Jev keys stay here.
+  // Nor any other variable that looks like a key, token or password (OPENAI_API_KEY, GH_TOKEN).
   // CLAUDE_CONFIG_DIR stays: it names the account whose login the child uses.
-  for (const k of Object.keys(out)) if (/^(CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PLUGIN_|CLAUDE_AGENT_|CLAUDE_EFFORT$|CLAUDE_PID$|ORCA_CLAUDE_AGENT_VIEW_PLUGIN_DIR$|MCP_|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$|TYPESAFE_API_KEY$|OPENROUTER_API_KEY$|JEVB_)/.test(k)) delete out[k];
+  for (const k of Object.keys(out)) if (/^(CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PLUGIN_|CLAUDE_AGENT_|CLAUDE_EFFORT$|CLAUDE_PID$|ORCA_CLAUDE_AGENT_VIEW_PLUGIN_DIR$|MCP_|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$|TYPESAFE_API_KEY$|OPENROUTER_API_KEY$|JEVB_)/.test(k) || /(API_?KEY|_TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(k)) delete out[k];
   return out;
 }
 

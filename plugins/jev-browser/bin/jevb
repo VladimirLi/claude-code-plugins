@@ -6,7 +6,7 @@ import { resolve, join } from "node:path";
 import { Client } from "../src/client.mjs";
 import { SHOTS, EXT } from "../src/paths.mjs";
 
-const USAGE = `jevb [--session NAME] <command> ...    (default session: $JEVB_SESSION or "default"; one tab per session)
+const USAGE = `jevb [--session NAME] [--fresh] <command> ...    (default session: $JEVB_SESSION or "default"; one tab per session)
 
   open <url> [--full]                          load a page; prints url, title, element count and the start
                                                of the visible text (--full: the element table, as observe full)

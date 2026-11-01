@@ -145,7 +145,7 @@ test("outerLoop: Haiku writes a needed text value, never a secret", async () => 
 });
 
 test("childEnv: no API key, no nested-session markers, no Jev keys", () => {
-  const e = childEnv({ PATH: "/bin", HOME: "/h", ANTHROPIC_API_KEY: "a", ANTHROPIC_AUTH_TOKEN: "t", CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_PLUGIN_DIRS: "/p", CLAUDE_CODE_SESSION_ID: "s", CLAUDE_CODE_MESSAGING_TOKEN: "m", CLAUDE_PID: "1", CLAUDE_EFFORT: "max", TYPESAFE_API_KEY: "k", JEVB_HAIKU: "1", CLAUDE_CONFIG_DIR: "/c" });
+  const e = childEnv({ PATH: "/bin", HOME: "/h", ANTHROPIC_API_KEY: "a", ANTHROPIC_AUTH_TOKEN: "t", CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_PLUGIN_DIRS: "/p", CLAUDE_CODE_SESSION_ID: "s", CLAUDE_CODE_MESSAGING_TOKEN: "m", CLAUDE_PID: "1", CLAUDE_EFFORT: "max", TYPESAFE_API_KEY: "k", JEVB_HAIKU: "1", OPENAI_API_KEY: "o", GH_TOKEN: "g", AWS_SECRET_ACCESS_KEY: "s", DB_PASSWORD: "p", CLAUDE_CONFIG_DIR: "/c" });
   assert.deepEqual(e, { PATH: "/bin", HOME: "/h", CLAUDE_CONFIG_DIR: "/c" });
   for (const f of ["--safe-mode", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--system-prompt"]) assert.ok(CHILD_ARGS.includes(f), f);
   assert.equal(CHILD_ARGS[CHILD_ARGS.indexOf("--setting-sources") + 1], "");

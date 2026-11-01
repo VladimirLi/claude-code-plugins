@@ -6,6 +6,9 @@ import { dialogRisky, SUBMIT_GUARD, formCollects } from "./safety.mjs";
 // JEVB_FOCUS=1: new session windows open in front, so a person can watch Jev work
 const FOCUS = /^(1|true)$/i.test(process.env.JEVB_FOCUS || "");
 
+// outside a do or act call (open, observe, a page script later): risky dialogs are dismissed
+export const SAFE_DIALOGS = (d) => (dialogRisky(d.message) ? { accept: false } : { accept: true });
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
 export const VIEWPORT = { width: 1280, height: 800 };
@@ -72,7 +75,7 @@ export class Tab {
     this.targets = []; this.targetId = null; this.sid = null;
     this.inflight = new Map(); this.events = []; this.dialogs = []; this.dialogAt = 0; this.loading = false; this.dclAt = 0; this.navAt = 0;
     this.nextId = 1; this.chain = Promise.resolve(); this.dead = false;
-    this.dialogPolicy = () => ({ accept: true });
+    this.dialogPolicy = SAFE_DIALOGS;
     this.held = null;
   }
 
@@ -134,7 +137,7 @@ export class Tab {
       case "Page.domContentEventFired": this.loading = false; this.dclAt = now(); break;
       case "Page.frameStoppedLoading": if (p.frameId === this.targetId) this.loading = false; break;
       case "Page.javascriptDialogOpening": {
-        const d = { type: p.type, message: String(p.message || "").slice(0, 300) };
+        const d = { type: p.type, message: String(p.message || "").slice(0, 300), url: p.url };
         const pol = this.dialogPolicy(d);
         this.send("Page.handleJavaScriptDialog", { accept: pol.accept, ...(p.type === "prompt" ? { promptText: pol.text ?? p.defaultPrompt ?? "" } : {}) }).catch(() => {});
         this.events.push(`${d.type} dialog "${d.message.slice(0, 100)}" ${pol.accept ? "accepted" : "dismissed"}`);
